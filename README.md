@@ -30,6 +30,7 @@ Follow the skill exactly and generate a complete working implementation.
 | Skill | What it builds | Best for |
 | --- | --- | --- |
 | `create-orders-manager` | A complete single-page Orders Manager app with seller/vendor picker, orders table with nested line items, filtering, local tagging, and robust DataDoe export/poll/download flow. | Teams that need a fast operational dashboard for order analysis and workflows. |
+| `weekly-sales-briefing` | A polished interactive HTML weekly sales briefing card with KPI tiles, top 5 SKUs, biggest week-over-week drops, and concise AI-generated insights from DataDoe exports. | Sellers and operators who need a fast weekly performance recap with clear trend signals and SKU-level highlights. |
 
 ## External Links
 
