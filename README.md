@@ -1,5 +1,7 @@
 # DataDoe AI Skills
 
+[![skills.sh](https://skills.sh/b/deltologic/datadoe-ai-skills)](https://skills.sh/deltologic/datadoe-ai-skills)
+
 Public library of reusable AI skills that help users go from **one prompt to a working MVP/PoC app** powered by the DataDoe API.
 
 Each skill is a practical blueprint you can use in coding agents (for example Cursor, Codex, Claude Code, Aider) to scaffold a ready-to-run application flow.
@@ -27,11 +29,11 @@ Follow the skill exactly and generate a complete working implementation.
 
 ## Available Skills
 
-| Skill | Install | What it builds | Best for |
-| --- | --- | --- | --- |
-| `create-orders-manager` | [![skills.sh](https://skills.sh/b/Deltologic/datadoe-ai-skills/create-orders-manager)](https://skills.sh/Deltologic/datadoe-ai-skills/create-orders-manager) | A complete single-page Orders Manager app with seller/vendor picker, orders table with nested line items, filtering, local tagging, and robust DataDoe export/poll/download flow. | Teams that need a fast operational dashboard for order analysis and workflows. |
-| `create-amazon-reconciliation-dashboard` | [![skills.sh](https://skills.sh/b/Deltologic/datadoe-ai-skills/create-amazon-reconciliation-dashboard)](https://skills.sh/Deltologic/datadoe-ai-skills/create-amazon-reconciliation-dashboard) | A self-contained interactive Amazon Reconciliation Dashboard with month switching, KPI cards, charts, a daily summary table, and an Order Explorer for reconciling Amazon orders against settlements. | Teams that need to compare Amazon orders and settlements across a 6-month window with clear cross-month reconciliation. |
-| `weekly-sales-briefing` | [![skills.sh](https://skills.sh/b/Deltologic/datadoe-ai-skills/weekly-sales-briefing)](https://skills.sh/Deltologic/datadoe-ai-skills/weekly-sales-briefing) | A polished interactive HTML weekly sales briefing card with KPI tiles, top 5 SKUs, biggest week-over-week drops, and concise AI-generated insights from DataDoe exports. | Sellers and operators who need a fast weekly performance recap with clear trend signals and SKU-level highlights. |
+| Skill | What it builds | Best for |
+| --- | --- | --- |
+| `create-orders-manager` | A complete single-page Orders Manager app with seller/vendor picker, orders table with nested line items, filtering, local tagging, and robust DataDoe export/poll/download flow. | Teams that need a fast operational dashboard for order analysis and workflows. |
+| `create-amazon-reconciliation-dashboard` | A self-contained interactive Amazon Reconciliation Dashboard with month switching, KPI cards, charts, a daily summary table, and an Order Explorer for reconciling Amazon orders against settlements. | Teams that need to compare Amazon orders and settlements across a 6-month window with clear cross-month reconciliation. |
+| `weekly-sales-briefing` | A polished interactive HTML weekly sales briefing card with KPI tiles, top 5 SKUs, biggest week-over-week drops, and concise AI-generated insights from DataDoe exports. | Sellers and operators who need a fast weekly performance recap with clear trend signals and SKU-level highlights. |
 
 ## Release Downloads
 
