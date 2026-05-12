@@ -2,6 +2,9 @@
 name: weekly-sales-briefing
 description: >-
   Generate a structured weekly Amazon sales briefing as an interactive HTML card. Use this skill whenever the user asks for a weekly sales report, weekly briefing, weekly summary, sales overview, or any request combining "week" with sales/revenue/performance. Also trigger when the user says things like "how did we do this week", "give me the weekly numbers", "show me this week's sales", or "weekly recap". The skill fetches live data from DataDoe (production) for pointed seller and renders a polished interactive HTML card with KPIs, top SKUs, biggest drops, and AI-generated insights.
+metadata:
+  author: DataDoe
+  check-more-skills-at: https://app.datadoe.com/hub/ai-agents-and-skills
 ---
 
 # Weekly Sales Briefing Skill

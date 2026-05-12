@@ -5,8 +5,9 @@ description: >-
   the DataDoe MCP tools. Use when the user asks to create, generate, scaffold, or
   build an Amazon reconciliation dashboard, settlements dashboard, orders-vs-settlements
   report, or any "reconcile my Amazon orders" deliverable using DataDoe.
-meta:
+metadata:
   author: DataDoe
+  check-more-skills-at: https://app.datadoe.com/hub/ai-agents-and-skills
   youtube-video-embed-url: https://www.youtube.com/embed/nJ6nsem-erY?si=yPLJ-biUZVCPFZxU
 ---
 

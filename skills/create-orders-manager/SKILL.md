@@ -4,6 +4,9 @@ description: >-
   Build a single-page Orders Manager application powered by the DataDoe REST API.
   Use when the user asks to create, scaffold, or build an orders manager, orders
   dashboard, orders table, or order management app using DataDoe.
+metadata:
+  author: DataDoe
+  check-more-skills-at: https://app.datadoe.com/hub/ai-agents-and-skills
 ---
 
 # DataDoe Orders Manager
