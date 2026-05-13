@@ -35,27 +35,18 @@ Follow the skill exactly and generate a complete working implementation.
 | `create-amazon-reconciliation-dashboard` | A self-contained interactive Amazon Reconciliation Dashboard with month switching, KPI cards, charts, a daily summary table, and an Order Explorer for reconciling Amazon orders against settlements. | Teams that need to compare Amazon orders and settlements across a 6-month window with clear cross-month reconciliation. |
 | `weekly-sales-briefing` | A polished interactive HTML weekly sales briefing card with KPI tiles, top 5 SKUs, biggest week-over-week drops, and concise AI-generated insights from DataDoe exports. | Sellers and operators who need a fast weekly performance recap with clear trend signals and SKU-level highlights. |
 
-## Release Downloads
-
-Each push that changes a skill under `skills/` publishes ZIP assets to a fixed GitHub release tag named `skills`.
-
-The download URL for a skill is static and follows this pattern:
-
-`https://github.com/<owner>/<repo>/releases/download/skills/<skill-name>.zip`
-
-The `<skill-name>` comes from the `name:` field in each `skills/*/SKILL.md` file, so the ZIP name and public URL both stay aligned with the skill name. On the next publish, the asset with the same name is replaced in place.
+## Installation with skills CLI
+To install selected skill from this repository use the following command:
+```bash
+npx skills@latest add Deltologic/datadoe-ai-skills --skill SKILL_NAME
+```
 
 ## External Links
 
+- [DataDoe Documentation](https://app.datadoe.com/hub/docs)
 - [DataDoe API Documentation](https://api.datadoe.com/api/v1/docs)
 - [DataDoe Data Scheme Reference](https://api.datadoe.com/api/v1/spec/data-scheme)
-- [Repository License (MIT)](./LICENSE)
 
 ## Contact
 
 For questions, feedback, or collaboration requests, email: [contact@datadoe.com](mailto:contact@datadoe.com)
-
-## CLI (In Progress)
-
-We are currently working on a CLI that will let you import a chosen skill directly with an `npx` command.  
-This feature is in progress and will be announced soon with exact package name and usage.
