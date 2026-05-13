@@ -1,0 +1,31 @@
+{
+  "name": "datadoe-ai-skills",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Public library of reusable AI skills for DataDoe-powered MVPs.",
+  "packageManager": "yarn@4.14.1",
+  "scripts": {
+    "test": "jest --runInBand"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Deltologic/datadoe-ai-skills.git"
+  },
+  "keywords": [],
+  "author": "DataDoe",
+  "license": "MIT",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Deltologic/datadoe-ai-skills/issues"
+  },
+  "homepage": "https://github.com/Deltologic/datadoe-ai-skills#readme",
+  "devDependencies": {
+    "@types/jest": "29.5.14",
+    "@types/node": "^25.7.0",
+    "jest": "29.7.0",
+    "ts-jest": "^29.4.9",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3",
+    "yaml": "^2.9.0"
+  }
+}
