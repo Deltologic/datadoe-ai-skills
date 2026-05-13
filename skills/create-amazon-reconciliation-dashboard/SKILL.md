@@ -71,7 +71,7 @@ A grid of cards that recompute on every month change:
 
 ### 6. Revenue Waterfall
 
-- Bars: Gross Revenue → + Tax → − Referral Fees → − FBA Fees → − Refunds → − Other → = Net Payout.
+- Bars: Gross Revenue → + Tax → - Referral Fees → - FBA Fees → - Refunds → - Other → = Net Payout.
 - Green bars for positive contributions, red for deductions, blue for the net total.
 
 ### 7. Daily Summary Table
@@ -105,7 +105,7 @@ The most prominent and functional section. Every order across all 6 months in a 
 | Fees         | settlements | `sum_referral_fee` + `sum_fba_fee`                                     |
 | Refund £     | settlements | `sum_refunded_amount` (if any)                                         |
 | Net Payout   | settlements | settlement `sum_total`                                                 |
-| Delta        | computed    | order revenue − settled revenue                                        |
+| Delta        | computed    | order revenue - settled revenue                                        |
 | Cross-Month  | computed    | badge showing "↗ Settled in [Month]" if settlement month ≠ order month |
 
 **Required interactive features:**
@@ -243,7 +243,7 @@ For each unique `amazon_order_id` across all 6 months:
 5. Calculate per-order:
    - Order side: revenue (`sum_item_price`), tax (`sum_item_tax`), quantity (`sum_qty`).
    - Settlement side: settled revenue, fees (referral + FBA), refund amount, net total.
-   - Delta: order revenue − settled revenue.
+   - Delta: order revenue - settled revenue.
 6. **Flag cross-month orders**: if settlement posted-date month ≠ `order_date` month, tag the row as "cross-month settlement".
 
 **C) Reconciliation logic — business rules:**

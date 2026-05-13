@@ -17,9 +17,9 @@ metadata:
 - **Seller ID**: `{{seller_id}}`
 - **MCP base**: https://mcp.datadoe.com/mcp/v1
 - **Currency**: `{{currency_code}}` (`{{currency_symbol}}`)
-- **"This week"**: Rolling last 7 days (today − 7 through yesterday, inclusive)
-- **"Last week"**: The 7 days before that (today − 14 through today − 8)
-- **"Last month"**: Same 7-day window from 4 weeks ago (today − 35 through today − 29)
+- **"This week"**: Rolling last 7 days (today - 7 through yesterday, inclusive)
+- **"Last week"**: The 7 days before that (today - 14 through today - 8)
+- **"Last month"**: Same 7-day window from 4 weeks ago (today - 35 through today - 29)
   Use today's actual date from the system context to compute all date ranges at runtime.
 
 ---
@@ -72,7 +72,7 @@ Also compute total revenue across all ASINs for each window.
 ### 6. Rank SKUs
 
 - **Top 5 by revenue this week**: sort by this week's `total_sales` descending, take top 5. Show ASIN, product name (truncated to ~40 chars), revenue, units.
-- **Top 3 drops vs last week**: compute `this_week_revenue − last_week_revenue` per ASIN. Sort ascending (most negative first), take top 3. Show ASIN, name, this week revenue, last week revenue, and `{{currency_symbol}}` / % drop. Only include ASINs that had revenue in both periods.
+- **Top 3 drops vs last week**: compute `this_week_revenue - last_week_revenue` per ASIN. Sort ascending (most negative first), take top 3. Show ASIN, name, this week revenue, last week revenue, and `{{currency_symbol}}` / % drop. Only include ASINs that had revenue in both periods.
 
 ### 7. Generate 1–2 insights
 
