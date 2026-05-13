@@ -15,7 +15,7 @@ metadata:
 
 - **Seller**: `{{seller_name}}`
 - **Seller ID**: `{{seller_id}}`
-- **MCP base**: https://api.datadoe.com/mcp/v1
+- **MCP base**: https://mcp.datadoe.com/mcp/v1
 - **Currency**: `{{currency_code}}` (`{{currency_symbol}}`)
 - **"This week"**: Rolling last 7 days (today − 7 through yesterday, inclusive)
 - **"Last week"**: The 7 days before that (today − 14 through today − 8)
