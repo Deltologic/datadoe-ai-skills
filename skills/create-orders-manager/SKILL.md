@@ -9,7 +9,7 @@ metadata:
   check-more-skills-at: https://app.datadoe.com/hub/ai-agents-and-skills
 ---
 
-# DataDoe Orders Manager
+# Orders Manager
 
 Build a complete, working single-page Orders Manager app using the DataDoe REST API. The app must be functional after a single execution.
 

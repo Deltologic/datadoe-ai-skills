@@ -11,7 +11,7 @@ metadata:
   youtube-video-embed-url: https://www.youtube.com/embed/nJ6nsem-erY?si=yPLJ-biUZVCPFZxU
 ---
 
-# DataDoe Amazon Reconciliation Dashboard
+# Amazon Reconciliation Dashboard
 
 Build a complete, single-file interactive HTML dashboard that reconciles 6 months of Amazon Order Line Items against Settlements & P&L Components, using the DataDoe MCP toolchain. The dashboard must be functional after a single execution — the user opens one HTML file in a browser and gets KPIs, charts, a daily table, and an Order Explorer with a month selector wired across all sections.
 
