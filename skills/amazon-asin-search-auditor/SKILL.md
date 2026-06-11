@@ -9,28 +9,28 @@ metadata:
 # Amazon ASIN Search Auditor
 
 # General Rules
-- Execute exactly all actions from the 'Action Plan'.
+- Execute exactly all actions from the "Action Plan".
 - Use the built-in browser directly for any ASIN analysis work.
 - Do not finish until all steps are done.
 - If you need a script to perform an action, use NodeJS.
-- Create a new directory in project root in `runs/RUN_DIR` with `RUN_DIR` being `run_YY_MM_DD_HH_mm`. Store all run files in that dir and only in that dir.
+- Create a new directory in the project root at `runs/RUN_DIR`, with `RUN_DIR` being `run_YY_MM_DD_HH_mm`. Store all run files in that directory and only in that directory.
 - Read `references/asin-visibility-auditor.md` when the user asks for analysis, optimization, or audit work on a specific ASIN.
 - When the Action Plan tells you to do so, you MUST spawn a sub-agent. Spawn sub-agents for those steps and only for those steps.
-    - Pause your work until the sub-agent is done. It is ok if you need to wait for the sub-agent for few minutes.
+    - Pause your work until the sub-agent is done. It is OK if you need to wait for the sub-agent for a few minutes.
     - Do not repeat the steps that were sent to the sub-agent.
 
 # Action Plan
 1. If the DataDoe Seller or Vendor is not provided: Ask the user to input the Seller or Vendor to use.
-2. (Spawn a subagent for this step) DataDoe resolver:
+2. (Spawn a sub-agent for this step) DataDoe resolver:
     - Use the 'sellers_and_vendors_list' tool.
     - Return only `{sellerId, marketplace, displayName}`.
-3. (Spawn a subagent for these steps) Core term export normalizer:
+3. (Spawn a sub-agent for these steps) Core term export normalizer:
     - Fetch the following top search terms data:
         - Source: `amazon_child_product_organic_search_ranks_per_week`.
         - Total top 5 search terms by `child_asin_purchase_count` from the last 60 days.
         - Add all other available metrics to the data.
         - Download the report to file using `exports_raw_url_get` method.
-        - It is ok if there is less than 60 days of data.
+        - It is OK if there are fewer than 60 days of data.
     - Write `coreSearchSummaries.json` with normalized fields matching `references/dashboard.md`.
     - Return only the top terms + totals.
 4. Prepare a list of unique search terms that appeared in the data.
@@ -43,9 +43,9 @@ metadata:
     - To search, enter a URL matching this pattern: `https://AMAZON_DOMAIN/s?k=SEARCH_TERM_URL_ENCODED`.
     - Use this command to URL encode: `node -e "console.log(encodeURIComponent('SEARCH_TERM'))"`.
     - Before collecting the data, make sure that `Deliver to`, language, and currency are properly set.
-    - Take a screenshot of the top of each results page in the built-in browser and save it in `search_rasults/screenshots/st-SEARCH_TERM.png`.
-    - Sponsored results are marked as sponsored. If a result is sponsored it is not organic (single ASIN cannot be both).
-    - For each of the search terms prepare a JSON file named `search_rasults/st-SEARCH_TERM.json` with the following content:
+    - Take a screenshot of the top of each results page in the built-in browser and save it in `search_results/screenshots/st-SEARCH_TERM.png`.
+    - Sponsored results are marked as sponsored. If a result is sponsored, it is not organic (a single ASIN cannot be both).
+    - For each search term, prepare a JSON file named `search_results/st-SEARCH_TERM.json` with the following content:
     ```json
         {
             "searchTerm": "SEARCH_TERM",
@@ -59,7 +59,7 @@ metadata:
                     "price_value": price as float 00.00,
                     "price_currency": "CURRENCY_CODE",
                     "asin_name": "NAME_OF_THE_ASIN (exact as displayed in search results)",
-                    "asin_rating" reviews rating as float 0.0 or null if not given in the result tile
+                    "asin_rating" review rating as float 0.0 or null if not given in the result tile,
                     "asin_image_url": "LINK_TO_THE_ITEM_IMAGE",
                     "asin_url": "LINK_TO_THE_ITEM (exact URL as the user would click it)",
                     "my_listing": null
@@ -78,11 +78,11 @@ metadata:
             ]
         }
     ```
-11. (Spawn a subagent for this step) Extract unique ASINs from all results for each search term using `scripts/list-asins.js`.
-12. (Spawn a subagent for this step) Fetch active listings for the seller using DataDoe and save it to CSV (include only ASINs):
+11. (Spawn a sub-agent for this step) Extract unique ASINs from all results for each search term using `scripts/list-asins.js`.
+12. (Spawn a sub-agent for this step) Fetch active listings for the seller using DataDoe and save it to CSV (include only ASINs):
     - Source: `amazon_listings_with_cogs`.
     - Paginate if the seller has more listings than the Export limit.
-13. (Spawn a subagent for these steps) Run the file-based post-processor for the step 11 ASIN list, step 12 listings export, and the dashboard build:
+13. (Spawn a sub-agent for these steps) Run the file-based post-processor for the step 11 ASIN list, step 12 listings export, and the dashboard build:
     - Mark my listings in JSONs using `scripts/mark-my-listings.js`.
     - Generate `report-data.json`.
     - Render `report.html`.
