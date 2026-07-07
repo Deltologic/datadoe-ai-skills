@@ -14,8 +14,7 @@ const readmePath = path.join(repoRoot, 'README.md');
 
 const requiredAuthor = 'DataDoe';
 const requiredSkillsUrl = 'https://app.datadoe.com/hub/ai-agents-and-skills';
-const requiredYoutubePrefix =
-  'https://www.youtube.com/embed/nJ6nsem-erY?si=yPLJ-biUZVCPFZxU';
+const requiredYoutubePrefix = 'https://www.youtube.com/embed/';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
