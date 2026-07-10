@@ -5,6 +5,10 @@ description: >-
 metadata:
   author: DataDoe
   check-more-skills-at: https://app.datadoe.com/hub/ai-agents-and-skills
+  access: read
+  category: Profit & Finance
+  interface: mcp
+  output: report
 ---
 
 # Weekly Business Review

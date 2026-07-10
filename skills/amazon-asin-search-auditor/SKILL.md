@@ -4,6 +4,10 @@ description: Audit an Amazon seller's organic and sponsored search visibility by
 metadata:
   author: DataDoe
   check-more-skills-at: https://app.datadoe.com/hub/ai-agents-and-skills
+  access: read
+  category: Search & SEO
+  interface: mcp
+  output: report
 ---
 
 # Amazon ASIN Search Auditor
