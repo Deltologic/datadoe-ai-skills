@@ -8,6 +8,7 @@ description: >-
 metadata:
   author: DataDoe
   check-more-skills-at: https://app.datadoe.com/hub/ai-agents-and-skills
+  title: Amazon Reconciliation Dashboard
   access: read
   category: Reporting
   interface: both
