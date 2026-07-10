@@ -11,6 +11,10 @@ description: >-
 metadata:
   author: DataDoe
   check-more-skills-at: https://app.datadoe.com/hub/ai-agents-and-skills
+  access: read
+  category: Account Health
+  interface: mcp
+  output: report
   youtube-video-embed-url: https://www.youtube.com/embed/2-zIMOAQj84?si=VZ4csDGoIqKUBMKN
 ---
 
