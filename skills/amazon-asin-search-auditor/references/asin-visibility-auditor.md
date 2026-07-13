@@ -95,7 +95,16 @@ Analyze the search performance of that ASIN and review its visibility in Amazon 
     - What we can learn from that competitor: 2-3 sentences about what we can learn from that competitor.
 
 # Output Format
-Output everything as a simple markdown document saved to a file. Print only the file location.
+
+Build `report-data.json` in the ASIN audit directory and render the HTML report using `scripts/render-asin-report.js`. Follow the data contract in `references/asin-report.md` exactly.
+
+```bash
+node amazon-asin-search-auditor/scripts/render-asin-report.js \
+  --data RUN_DIR/per-asin-audit/ASIN/report-data.json \
+  --out RUN_DIR/per-asin-audit/ASIN/report.html
+```
+
+Print only the path to `report.html` when done.
 
 Use this markdown structure:
 

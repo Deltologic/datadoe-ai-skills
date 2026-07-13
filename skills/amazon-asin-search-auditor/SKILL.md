@@ -38,7 +38,7 @@ metadata:
     - Write `coreSearchSummaries.json` with normalized fields matching `references/dashboard.md`.
     - Return only the top terms + totals.
 4. Prepare a list of unique search terms that appeared in the data.
-5. Open Amazon website for the seller's marketplace in the built-in browser:
+5. Open the Amazon website for the seller's marketplace in the built-in browser if available, otherwise fall back to Chrome MCP:
     - Always use web browser cards that are visible to the user, so the user can follow your actions.
 6. If prompted: Accept cookies usage.
 7. Change the `Deliver to` to a valid postal code from the capital of the marketplace country.

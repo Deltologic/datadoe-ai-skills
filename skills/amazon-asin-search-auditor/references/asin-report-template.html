@@ -1,0 +1,874 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ASIN Visibility Report</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <script
+      crossorigin
+      src="https://unpkg.com/react@18/umd/react.development.js"
+    ></script>
+    <script
+      crossorigin
+      src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"
+    ></script>
+    <style>
+      :root {
+        --bg: #071a17;
+        --panel: rgba(5, 20, 17, 0.84);
+        --line: rgba(255, 255, 255, 0.08);
+        --text: #edf2ff;
+        --muted: #7fbfa8;
+        --accent: #12a070;
+        --accent-2: #00b48c;
+        --good: #12a070;
+        --warn: #fbbf24;
+        --bad: #fb7185;
+        --shadow: 0 24px 64px rgba(0, 0, 0, 0.3);
+        --radius: 16px;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        color: var(--text);
+        font-family: "IBM Plex Sans", sans-serif;
+        background:
+          radial-gradient(
+            circle at top left,
+            rgba(18, 160, 112, 0.14),
+            transparent 28%
+          ),
+          radial-gradient(
+            circle at top right,
+            rgba(0, 180, 140, 0.1),
+            transparent 24%
+          ),
+          linear-gradient(180deg, #071d1a 0%, #071a17 100%);
+      }
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        background-image:
+          linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+          linear-gradient(
+            90deg,
+            rgba(255, 255, 255, 0.035) 1px,
+            transparent 1px
+          );
+        background-size: 44px 44px;
+        opacity: 0.16;
+        mask-image: linear-gradient(
+          180deg,
+          rgba(0, 0, 0, 0.8),
+          transparent 92%
+        );
+      }
+      #root {
+        position: relative;
+        z-index: 1;
+      }
+      .shell {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 24px 18px 48px;
+      }
+      .hero {
+        background: linear-gradient(
+          135deg,
+          rgba(5, 22, 18, 0.96),
+          rgba(7, 26, 23, 0.92)
+        );
+        border: 1px solid var(--line);
+        border-radius: 28px;
+        padding: 28px;
+        box-shadow: var(--shadow);
+        overflow: hidden;
+        position: relative;
+        margin-bottom: 18px;
+        display: grid;
+        grid-template-columns: 140px 1fr;
+        gap: 24px;
+        align-items: center;
+      }
+      .hero::after {
+        content: "";
+        position: absolute;
+        right: -50px;
+        top: -45px;
+        width: 220px;
+        height: 220px;
+        border-radius: 50%;
+        background: radial-gradient(
+          circle,
+          rgba(18, 160, 112, 0.22) 0%,
+          transparent 70%
+        );
+      }
+      .hero-img {
+        width: 140px;
+        height: 140px;
+        border-radius: 20px;
+        object-fit: cover;
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        flex: none;
+      }
+      .eyebrow {
+        color: var(--accent);
+        text-transform: uppercase;
+        letter-spacing: 0.18em;
+        font-size: 11px;
+        margin-bottom: 8px;
+      }
+      h1 {
+        font-family: "Space Grotesk", sans-serif;
+        margin: 0 0 10px;
+        font-size: clamp(20px, 3vw, 32px);
+        line-height: 1.15;
+        letter-spacing: -0.03em;
+      }
+      .meta {
+        color: var(--muted);
+        font-size: 12px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 12px;
+        margin-top: 10px;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 700;
+        border: 1px solid var(--line);
+      }
+      .good {
+        background: rgba(18, 160, 112, 0.14);
+        color: #a7f3d0;
+        border-color: rgba(18, 160, 112, 0.24);
+      }
+      .warn {
+        background: rgba(251, 191, 36, 0.14);
+        color: #fde68a;
+        border-color: rgba(251, 191, 36, 0.24);
+      }
+      .bad {
+        background: rgba(251, 113, 133, 0.12);
+        color: #fecdd3;
+        border-color: rgba(251, 113, 133, 0.24);
+      }
+      .neutral {
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--muted);
+      }
+      .section {
+        margin-bottom: 18px;
+      }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+        overflow: hidden;
+      }
+      .panel-head {
+        padding: 16px 18px 12px;
+        border-bottom: 1px solid var(--line);
+      }
+      .panel-title {
+        font-family: "Space Grotesk", sans-serif;
+        font-size: 17px;
+        font-weight: 700;
+      }
+      .panel-sub {
+        color: var(--muted);
+        font-size: 12px;
+        margin-top: 3px;
+      }
+      .panel-body {
+        padding: 16px 18px 18px;
+      }
+      .summary-text {
+        color: var(--muted);
+        line-height: 1.65;
+        font-size: 14px;
+      }
+      .perf-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+      }
+      .metric {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 14px;
+        background: rgba(255, 255, 255, 0.03);
+      }
+      .metric .k {
+        color: var(--muted);
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+      }
+      .metric .v {
+        font-family: "Space Grotesk", sans-serif;
+        font-size: 26px;
+        font-weight: 700;
+        margin-top: 8px;
+      }
+      .metric .s {
+        color: var(--muted);
+        font-size: 11px;
+        margin-top: 4px;
+      }
+      .areas-grid {
+        display: grid;
+        gap: 12px;
+      }
+      .area-card {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 16px 18px;
+        background: rgba(255, 255, 255, 0.03);
+        display: grid;
+        grid-template-columns: 200px 1fr 1fr;
+        gap: 16px;
+        align-items: start;
+      }
+      .area-name {
+        font-family: "Space Grotesk", sans-serif;
+        font-weight: 700;
+        font-size: 15px;
+      }
+      .rating-bar-wrap {
+        margin-top: 8px;
+      }
+      .rating-label {
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        margin-bottom: 4px;
+      }
+      .rating-bar-bg {
+        height: 6px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+        overflow: hidden;
+      }
+      .rating-bar-fill {
+        height: 100%;
+        border-radius: 999px;
+      }
+      .rating-number {
+        font-family: "Space Grotesk", sans-serif;
+        font-size: 22px;
+        font-weight: 700;
+        margin-top: 6px;
+      }
+      .area-col-label {
+        color: var(--muted);
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        margin-bottom: 6px;
+      }
+      .area-text {
+        font-size: 13px;
+        line-height: 1.6;
+        color: var(--muted);
+      }
+      .area-reco {
+        font-size: 13px;
+        line-height: 1.6;
+        color: var(--text);
+      }
+      .overall-wrap {
+        background: linear-gradient(
+          135deg,
+          rgba(18, 160, 112, 0.08),
+          rgba(0, 180, 140, 0.05)
+        );
+        border: 1px solid rgba(18, 160, 112, 0.15);
+        border-radius: 20px;
+        padding: 24px 26px;
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 28px;
+        align-items: center;
+      }
+      .overall-score {
+        text-align: center;
+      }
+      .overall-number {
+        font-family: "Space Grotesk", sans-serif;
+        font-size: 72px;
+        font-weight: 700;
+        line-height: 1;
+      }
+      .overall-denom {
+        color: var(--muted);
+        font-size: 18px;
+      }
+      .overall-label {
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        margin-top: 6px;
+      }
+      .improvements-list {
+        display: grid;
+        gap: 10px;
+        margin-top: 4px;
+      }
+      .improvement-item {
+        display: flex;
+        gap: 12px;
+        align-items: flex-start;
+        padding: 12px 14px;
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid var(--line);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      .improvement-num {
+        font-family: "Space Grotesk", sans-serif;
+        font-weight: 700;
+        color: var(--accent);
+        font-size: 16px;
+        flex: none;
+        width: 20px;
+      }
+      .table-wrap {
+        overflow: auto;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        background: rgba(6, 10, 18, 0.36);
+      }
+      th,
+      td {
+        padding: 11px 14px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        text-align: left;
+        vertical-align: top;
+      }
+      th {
+        color: var(--muted);
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        background: rgba(255, 255, 255, 0.03);
+        position: sticky;
+        top: 0;
+        z-index: 1;
+      }
+      tr:last-child td {
+        border-bottom: none;
+      }
+      tr:hover td {
+        background: rgba(255, 255, 255, 0.02);
+      }
+      .mono {
+        font-family:
+          ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 12px;
+      }
+      .score-ring {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        font-family: "Space Grotesk", sans-serif;
+        font-weight: 700;
+        font-size: 15px;
+      }
+      @media (max-width: 900px) {
+        .hero {
+          grid-template-columns: 1fr;
+        }
+        .hero-img {
+          width: 100%;
+          height: 200px;
+          border-radius: 14px;
+        }
+        .perf-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .area-card {
+          grid-template-columns: 1fr;
+        }
+        .overall-wrap {
+          grid-template-columns: 1fr;
+          text-align: center;
+        }
+      }
+      @media (max-width: 600px) {
+        .shell {
+          padding: 14px 12px 36px;
+        }
+        .perf-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      window.__ASIN_REPORT_DATA__ = __DATA__;
+    </script>
+    <script>
+      const h = React.createElement;
+      const nf0 = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
+      const nf2 = new Intl.NumberFormat("de-DE", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      });
+
+      function fmt(v) {
+        return typeof v === "number" ? nf0.format(v) : String(v ?? "n/a");
+      }
+      function fmtCurrency(v, c) {
+        if (v == null) return "n/a";
+        return nf2.format(v) + (c ? " " + c : "");
+      }
+
+      function ratingColor(r) {
+        if (r >= 4) return "#12a070";
+        if (r >= 3) return "#fbbf24";
+        return "#fb7185";
+      }
+
+      function ratingPill(r) {
+        const cls = r >= 4 ? "good" : r >= 3 ? "warn" : "bad";
+        return h("span", { className: "pill " + cls }, r.toFixed(1) + " / 5");
+      }
+
+      function ScoreRing({ score }) {
+        const color = ratingColor(score);
+        return h(
+          "div",
+          {
+            className: "score-ring",
+            style: {
+              background: color + "22",
+              border: "2px solid " + color,
+              color,
+            },
+          },
+          score,
+        );
+      }
+
+      function RatingBar({ rating }) {
+        const color = ratingColor(rating);
+        const pct = (rating / 5) * 100;
+        return h(
+          "div",
+          { className: "rating-bar-wrap" },
+          h("div", { className: "rating-label" }, "Rating"),
+          h(
+            "div",
+            { className: "rating-bar-bg" },
+            h("div", {
+              className: "rating-bar-fill",
+              style: { width: pct + "%", background: color },
+            }),
+          ),
+          h(
+            "div",
+            { className: "rating-number", style: { color } },
+            rating.toFixed(1),
+          ),
+        );
+      }
+
+      function App() {
+        const data = window.__ASIN_REPORT_DATA__;
+        const {
+          meta,
+          listing,
+          summary,
+          areas,
+          overallRating,
+          priorityImprovements,
+          competitors,
+          searchPerformance,
+        } = data;
+
+        const overallColor = ratingColor(overallRating);
+        const sp = searchPerformance || {};
+
+        return h(
+          "div",
+          { className: "shell" },
+
+          h(
+            "div",
+            { className: "hero" },
+            h("img", {
+              className: "hero-img",
+              src:
+                listing?.imageUrl ||
+                "https://via.placeholder.com/140?text=ASIN",
+              alt: listing?.title || meta?.asin,
+            }),
+            h(
+              "div",
+              null,
+              h(
+                "div",
+                { className: "eyebrow" },
+                (meta?.sellerName || "Seller") +
+                  " • Amazon " +
+                  (meta?.marketplace || "") +
+                  " • ASIN audit • " +
+                  (meta?.date || ""),
+              ),
+              h("h1", null, listing?.title || meta?.asin),
+              h("div", { className: "meta" }, [
+                meta?.asin &&
+                  h("span", { className: "mono", key: "asin" }, meta.asin),
+                listing?.price &&
+                  h(
+                    "span",
+                    { className: "pill neutral", key: "price" },
+                    fmtCurrency(listing.price, listing.currency),
+                  ),
+                listing?.rating &&
+                  h(
+                    "span",
+                    { className: "pill neutral", key: "rating" },
+                    "★ " +
+                      listing.rating +
+                      (listing.reviewCount
+                        ? " (" + fmt(listing.reviewCount) + ")"
+                        : ""),
+                  ),
+                meta?.asinUrl &&
+                  h(
+                    "a",
+                    {
+                      href: meta.asinUrl,
+                      target: "_blank",
+                      rel: "noreferrer",
+                      key: "link",
+                      style: { color: "var(--accent)", fontSize: "12px" },
+                    },
+                    "Open on Amazon",
+                  ),
+              ]),
+            ),
+          ),
+
+          summary &&
+            h(
+              "div",
+              { className: "section panel" },
+              h(
+                "div",
+                { className: "panel-head" },
+                h("div", { className: "panel-title" }, "Summary"),
+              ),
+              h(
+                "div",
+                { className: "panel-body" },
+                h("div", { className: "summary-text" }, summary),
+              ),
+            ),
+
+          (sp.impressions != null ||
+            sp.clicks != null ||
+            sp.organicRank != null ||
+            sp.conversionRate != null) &&
+            h(
+              "div",
+              { className: "section panel" },
+              h(
+                "div",
+                { className: "panel-head" },
+                h("div", { className: "panel-title" }, "Search performance"),
+                h(
+                  "div",
+                  { className: "panel-sub" },
+                  "Latest available data from DataDoe",
+                ),
+              ),
+              h(
+                "div",
+                { className: "panel-body" },
+                h("div", { className: "perf-grid" }, [
+                  h(
+                    "div",
+                    { className: "metric", key: "imp" },
+                    h("div", { className: "k" }, "Impressions"),
+                    h("div", { className: "v" }, fmt(sp.impressions)),
+                    h(
+                      "div",
+                      { className: "s" },
+                      sp.impressionsNote || "Monthly snapshot",
+                    ),
+                  ),
+                  h(
+                    "div",
+                    { className: "metric", key: "clk" },
+                    h("div", { className: "k" }, "Clicks"),
+                    h("div", { className: "v" }, fmt(sp.clicks)),
+                    h(
+                      "div",
+                      { className: "s" },
+                      sp.clicksNote || "Monthly snapshot",
+                    ),
+                  ),
+                  h(
+                    "div",
+                    { className: "metric", key: "cvr" },
+                    h("div", { className: "k" }, "Conv. rate"),
+                    h(
+                      "div",
+                      { className: "v" },
+                      sp.conversionRate != null
+                        ? sp.conversionRate.toFixed(2) + "%"
+                        : "n/a",
+                    ),
+                    h("div", { className: "s" }, sp.conversionRateNote || ""),
+                  ),
+                  h(
+                    "div",
+                    { className: "metric", key: "rank" },
+                    h("div", { className: "k" }, "Organic rank"),
+                    h(
+                      "div",
+                      { className: "v" },
+                      sp.organicRank != null ? "#" + sp.organicRank : "n/a",
+                    ),
+                    h(
+                      "div",
+                      { className: "s" },
+                      sp.organicRankNote || "Best rank from core data",
+                    ),
+                  ),
+                ]),
+              ),
+            ),
+
+          areas &&
+            areas.length > 0 &&
+            h(
+              "div",
+              { className: "section panel" },
+              h(
+                "div",
+                { className: "panel-head" },
+                h("div", { className: "panel-title" }, "Area analysis"),
+                h(
+                  "div",
+                  { className: "panel-sub" },
+                  areas.length + " areas reviewed",
+                ),
+              ),
+              h(
+                "div",
+                { className: "panel-body" },
+                h(
+                  "div",
+                  { className: "areas-grid" },
+                  areas.map((area, i) =>
+                    h(
+                      "div",
+                      { className: "area-card", key: i },
+                      h(
+                        "div",
+                        { className: "area-name-col" },
+                        h("div", { className: "area-name" }, area.name),
+                        h(RatingBar, { rating: area.rating }),
+                      ),
+                      h(
+                        "div",
+                        null,
+                        h("div", { className: "area-col-label" }, "Details"),
+                        h("div", { className: "area-text" }, area.details),
+                      ),
+                      h(
+                        "div",
+                        null,
+                        h(
+                          "div",
+                          { className: "area-col-label" },
+                          "Recommendations",
+                        ),
+                        area.recommendations
+                          ? h(
+                              "div",
+                              { className: "area-reco" },
+                              area.recommendations,
+                            )
+                          : h("div", { className: "area-text" }, "—"),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
+          h(
+            "div",
+            { className: "section overall-wrap" },
+            h(
+              "div",
+              { className: "overall-score" },
+              h(
+                "div",
+                { className: "overall-number", style: { color: overallColor } },
+                overallRating.toFixed(1),
+              ),
+              h("div", { className: "overall-denom" }, "/ 5"),
+              h("div", { className: "overall-label" }, "Overall score"),
+            ),
+            h(
+              "div",
+              null,
+              h(
+                "div",
+                { className: "panel-title", style: { marginBottom: "12px" } },
+                "Priority improvements",
+              ),
+              priorityImprovements && priorityImprovements.length > 0
+                ? h(
+                    "div",
+                    { className: "improvements-list" },
+                    priorityImprovements.map((imp, i) =>
+                      h(
+                        "div",
+                        { className: "improvement-item", key: i },
+                        h("div", { className: "improvement-num" }, i + 1),
+                        h("div", null, imp),
+                      ),
+                    ),
+                  )
+                : h(
+                    "div",
+                    { style: { color: "var(--muted)", fontSize: "13px" } },
+                    "No improvements needed.",
+                  ),
+            ),
+          ),
+
+          competitors &&
+            competitors.length > 0 &&
+            h(
+              "div",
+              { className: "section panel" },
+              h(
+                "div",
+                { className: "panel-head" },
+                h("div", { className: "panel-title" }, "Top competitors"),
+                h(
+                  "div",
+                  { className: "panel-sub" },
+                  "Based on search results from tracked terms",
+                ),
+              ),
+              h(
+                "div",
+                { className: "panel-body" },
+                h(
+                  "div",
+                  { className: "table-wrap" },
+                  h(
+                    "table",
+                    null,
+                    h(
+                      "thead",
+                      null,
+                      h(
+                        "tr",
+                        null,
+                        h("th", null, "Competitor"),
+                        h("th", null, "Price"),
+                        h("th", null, "Threat"),
+                        h("th", null, "What we can learn"),
+                        h("th", null, "Link"),
+                      ),
+                    ),
+                    h(
+                      "tbody",
+                      null,
+                      competitors.map((c, i) =>
+                        h(
+                          "tr",
+                          { key: i },
+                          h("td", null, c.name),
+                          h("td", null, c.price || "n/a"),
+                          h("td", null, h(ScoreRing, { score: c.score })),
+                          h(
+                            "td",
+                            null,
+                            h(
+                              "span",
+                              {
+                                style: {
+                                  fontSize: "13px",
+                                  color: "var(--muted)",
+                                  lineHeight: 1.5,
+                                  display: "block",
+                                },
+                              },
+                              c.learnings,
+                            ),
+                          ),
+                          h(
+                            "td",
+                            null,
+                            c.url
+                              ? h(
+                                  "a",
+                                  {
+                                    href: c.url,
+                                    target: "_blank",
+                                    rel: "noreferrer",
+                                    style: {
+                                      color: "var(--accent)",
+                                      fontSize: "12px",
+                                    },
+                                  },
+                                  "open",
+                                )
+                              : "—",
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        );
+      }
+
+      ReactDOM.createRoot(document.getElementById("root")).render(h(App));
+    </script>
+  </body>
+</html>
