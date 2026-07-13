@@ -7,6 +7,11 @@ description: >-
 metadata:
   author: DataDoe
   check-more-skills-at: https://app.datadoe.com/hub/ai-agents-and-skills
+  title: Orders Manager Builder
+  access: read
+  category: Reporting
+  interface: api
+  output: app
 ---
 
 # Orders Manager

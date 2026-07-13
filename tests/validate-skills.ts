@@ -14,8 +14,27 @@ const readmePath = path.join(repoRoot, 'README.md');
 
 const requiredAuthor = 'DataDoe';
 const requiredSkillsUrl = 'https://app.datadoe.com/hub/ai-agents-and-skills';
-const requiredYoutubePrefix =
-  'https://www.youtube.com/embed/nJ6nsem-erY?si=yPLJ-biUZVCPFZxU';
+const requiredYoutubePrefix = 'https://www.youtube.com/embed/';
+
+const allowedCategories = [
+  'Reporting',
+  'Profit & Finance',
+  'Account Health',
+  'PPC & Ads',
+  'Inventory',
+  'Listings & Content',
+  'Search & SEO',
+] as const;
+const allowedAccess = ['read', 'write'] as const;
+const allowedInterface = ['mcp', 'api', 'both'] as const;
+const allowedOutput = ['report', 'app', 'action'] as const;
+
+const enumMetadataChecks = [
+  { key: 'category', allowed: allowedCategories },
+  { key: 'access', allowed: allowedAccess },
+  { key: 'interface', allowed: allowedInterface },
+  { key: 'output', allowed: allowedOutput },
+] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -89,6 +108,17 @@ function validateSkillDirectory(skillDirectory: string): string[] {
     } else if (!youtubeUrl.startsWith(requiredYoutubePrefix)) {
       errors.push(
         `${skillDirectory}: metadata.youtube-video-embed-url must start with ${requiredYoutubePrefix}.`,
+      );
+    }
+  }
+
+  for (const check of enumMetadataChecks) {
+    const value = metadata[check.key];
+    if (typeof value !== 'string' || value.trim() === '') {
+      errors.push(`${skillDirectory}: metadata.${check.key} is required.`);
+    } else if (!(check.allowed as readonly string[]).includes(value)) {
+      errors.push(
+        `${skillDirectory}: metadata.${check.key} must be one of: ${check.allowed.join(', ')} (got "${value}").`,
       );
     }
   }
