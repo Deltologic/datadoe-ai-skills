@@ -5,9 +5,9 @@ description: >-
   and decompose each move into its cause: traffic, conversion, price, or buy-box. Ranked
   by the size of the swing in money, with a data-completeness guard on both windows so a
   lagging or partial week doesn't read as a fake collapse or a fake boom. Live from
-  DataDoe, read-only. Use for "what
-  changed", "biggest movers", "why did sales drop", "what's up this week", "sales down",
-  "which products dropped", "what moved", or "week over week".
+  DataDoe, read-only. Use for "what changed", "biggest movers", "why did sales drop",
+  "what's up this week", "sales down", "which products dropped", "what moved", or
+  "week over week".
 metadata:
   author: DataDoe
   check-more-skills-at: https://app.datadoe.com/hub/ai-agents-and-skills
