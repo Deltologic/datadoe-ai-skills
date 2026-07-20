@@ -3,10 +3,11 @@ name: sales-movers-scanner
 description: >-
   Scan the whole catalog for the SKUs that moved the most this period - up and down -
   and decompose each move into its cause: traffic, conversion, price, or buy-box. Ranked
-  by the size of the swing in money, with a data-completeness guard so a lagging recent
-  week doesn't read as a fake collapse. Live from DataDoe, read-only. Use for "what
-  changed", "biggest movers", "why did sales drop", "what's up this week", "sales down",
-  "which products dropped", "what moved", or "week over week".
+  by the size of the swing in money, with a data-completeness guard on both windows so a
+  lagging or partial week doesn't read as a fake collapse or a fake boom. Live from
+  DataDoe, read-only. Use for "what changed", "biggest movers", "why did sales drop",
+  "what's up this week", "sales down", "which products dropped", "what moved", or
+  "week over week".
 metadata:
   author: DataDoe
   check-more-skills-at: https://app.datadoe.com/hub/ai-agents-and-skills
@@ -61,14 +62,20 @@ recent window to the prior equal window, then for each big mover decompose:
 4. **Roll up**: is the catalog move concentrated in a few SKUs or broad? One suppressed
    hero SKU vs an across-the-board seasonal dip are very different stories.
 
-**Data-completeness guard (check before you trust a broad decline).** Sales & Traffic
-lags, so the most recent days of the recent window may still be filling in. The tell:
-if *most* SKUs drop by a *similar* amount and *all* read as "traffic" (sessions down
-~uniformly), that is almost always an incomplete recent window, not a real collapse -
-do NOT report a catalog crash. Either widen the recent window's end-buffer to a few more
-days and re-pull, or state clearly that the recent window looks under-reported. A real
-move is usually concentrated in specific SKUs with mixed drivers (traffic here, buy-box
-there), not a flat uniform drop everywhere.
+**Data-completeness guard (check BOTH windows before you trust any broad move).** Sales &
+Traffic lags and backfills unevenly, so *either* window can be under-counted - a lagging
+recent window fakes a collapse, and an under-counted prior window fakes a boom (every SKU
+reads as a riser). Guard both:
+- **Normalize by effective days, not calendar days present.** A window's **effective
+  days** = sum over its days of (day row count / median daily rows). Two windows are only
+  comparable when their effective days are ~equal. If they differ materially (a missing or
+  half-loaded day on either side), the delta is an artifact - re-pull/shift the windows or
+  state that a window looks under-reported; do NOT report the move as real.
+- **The uniform-move tell.** If *most* SKUs move by a *similar* amount in the *same*
+  direction and *all* read as "traffic" (sessions up/down ~uniformly), that is almost
+  always an incomplete window on one side, not a real catalog swing. A real move is
+  concentrated in specific SKUs with mixed drivers (traffic here, buy-box there), not a
+  flat uniform shift everywhere.
 
 ## Configuration
 
@@ -79,8 +86,10 @@ there), not a flat uniform drop everywhere.
     (conversion), `buybox_percentage`, `product_name`. This one table carries both the
     outcome (sales) and the funnel (traffic, conversion, buy-box) to decompose it.
 - Windows: compare a recent window to the prior equal window (e.g. last 7 days vs the 7
-  before). **This table can lag up to ~4 days**, so end the recent window a few days back
-  so you compare two complete windows, not a full week against a half-reported one.
+  before). **This table lags by a variable amount** (6+ days has been observed, not a
+  fixed 4) - never assume a fixed offset. Detect the last complete day dynamically (see
+  workflow step 3) and end both windows at/before it, so you compare two equally-complete
+  windows, not a full week against a half-reported one.
 - Currency/marketplace: read `marketplace_country_code`; keep each marketplace in its own
   currency and scan them separately - never sum sales across currencies.
 
@@ -88,20 +97,35 @@ there), not a flat uniform drop everywhere.
 
 1. `sellers_and_vendors_list` -> pick the seller.
 2. `exports_sources_get` -> confirm `amazon_sales_and_traffic_with_cogs` is `enabled`.
-3. **Pull both windows:** `exports_create` twice (recent + prior equal window), each
+3. **Calibrate completeness first - don't assume a lag.** `exports_create` once over a
+   wide span (~30 days) `groupBy [date, child_asin]`, then count the **records per `date`**
+   (the number of ASINs reporting that day) to get each day's row count. From those counts:
+   - **Median daily row count** for the account, and a **full-day threshold = ~60% of the
+     median** - relative and per-account, never a fixed count like "~1300".
+   - **Last complete day** = the latest `date` at or above the threshold (walk back from
+     the tail). The lag is whatever this detects - 6+ days has been observed, not 4.
+   - **Gap days** = any `date` inside a window below the threshold, including mid-window
+     holes, not only the lagging tail - flag and exclude them.
+   End both windows at/before the last complete day.
+4. **Pull both windows:** `exports_create` twice (recent + prior equal window), each
    `groupBy [child_asin, product_name]`, summing `total_sales`, `total_units`,
    `session`, `page_views`, and averaging `units_session_percentage` and
-   `buybox_percentage`. Respect the ~4-day lag when setting the recent window's end.
-4. **Join on child ASIN** and compute per SKU: sales change (abs + %), and the change in
+   `buybox_percentage`. (These `avg()` aggregations are supported; a first-attempt failure
+   is a transient backend blip - retry, it is not a query-shape problem.)
+5. **Check both windows for completeness** (see the guard): compute each window's
+   **effective days** = sum over its days of (day row count / median daily rows). If the
+   two windows' effective days differ materially, or either has gap days, the comparison
+   is apples-to-oranges - re-pull/shift or flag it; do not report the delta as real.
+6. **Join on child ASIN** and compute per SKU: sales change (abs + %), and the change in
    sessions, conversion, price-per-unit and buy-box.
-5. **Rank by absolute sales change**; take the top gainers and top decliners.
-6. **Decompose each** to its dominant driver (traffic / conversion / price / buy-box) and
+7. **Rank by absolute sales change**; take the top gainers and top decliners.
+8. **Decompose each** to its dominant driver (traffic / conversion / price / buy-box) and
    attach the lever. Add the catalog roll-up (concentrated vs broad).
 
 ## Output format
 
 ```
-Sales Movers - {marketplace} - {recent window} vs {prior window}   (~4d lag respected)
+Sales Movers - {marketplace} - {recent window} vs {prior window}   (ends {last complete day}; both windows complete)
 Net catalog change: {cur}{delta} ({pct}%)   ·   concentrated in {k} SKUs / broad
 
 TOP DECLINERS (by money lost)
@@ -133,7 +157,8 @@ SKU's delta.
 - Did I decompose each mover into traffic vs conversion vs price vs buy-box, not just
   report the delta?
 - Did I check buy-box on every decliner (the classic hidden conversion killer)?
-- Did I respect the ~4-day data lag so I compared two complete windows?
+- Did I detect the last complete day dynamically (not assume a fixed lag) and check BOTH
+  windows for completeness / equal effective days before trusting the delta?
 - Did I say whether the move is concentrated or broad (one SKU vs seasonality)?
 - Did I keep each marketplace in its own currency?
 
@@ -142,13 +167,15 @@ SKU's delta.
 - Reporting deltas with no cause - the decomposition (traffic/conversion/price/buy-box)
   is the whole point.
 - Ranking by percent - tiny SKUs dominate and the real money hides.
-- Comparing a partial recent week (data lag) against a full prior week - a fake drop.
+- Comparing windows of unequal completeness - a partial recent week fakes a drop, a
+  partial prior week fakes a boom. Check effective days on both sides.
 - Blaming the listing when sessions fell (that's traffic) or when the buy-box dropped
   (that's pricing/competitor).
 - Summing sales across marketplaces/currencies into one number.
 - Reacting to a single SKU's noise instead of the ranked, material movers.
-- Reporting a broad, uniform, all-traffic decline as real - that is the recent window
-  still reporting (data lag); widen the buffer or flag it, don't cry wolf.
+- Reporting a broad, uniform, all-traffic move (either direction) as real - that is an
+  incomplete window on one side; re-pull at the detected last complete day or flag it,
+  don't cry wolf.
 - Calling a buy-box/conversion rise from ~0 an organic win when it's back-in-stock, or
   reporting a >100% conversion rate literally (units-per-session quirk).
 
