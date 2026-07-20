@@ -114,9 +114,10 @@ moves it - and separately note how much of the volume is unfixable noise.
    `groupBy [child_asin, sku, amazon_return_reason, amazon_fulfillment_channel]`,
    `count` returns (+ `sum amazon_return_refunded_amount`, `sum amazon_return_label_cost`
    for FBM). Aggregate to per-SKU totals and a per-SKU reason histogram.
-   Pull it **grouped and filter client-side** - do NOT server-side filter `amazon_returns`
-   by `sku` / `child_asin`: exact, `contains`, and `beginsWith` all return 0 rows even for
-   values present in the same table's grouped output (known backend issue).
+   Prefer pulling grouped and filtering client-side - you need the full per-SKU reason
+   histogram anyway, so one grouped pull is the natural shape. (Server-side `sku` /
+   `child_asin` filtering on `amazon_returns` has been unreliable in the past; if you do
+   filter server-side, verify it returns rows before relying on it.)
 4. **Sales + rate:** `exports_create` on `amazon_sales_and_traffic_with_cogs` for the
    same window, `groupBy child_asin`, `sum total_units`, and pull `units_refunded` /
    `refund_rate` + COGS. Compute return rate per SKU and the catalog median.
@@ -192,7 +193,7 @@ short, money-ranked list where each line already says what to do.
 - Exact refund money is most precise from settlements; the sales/returns tables give a
   solid estimate when settlements aren't pulled - state which you used.
 - `amazon_returns` money columns are FBM-only; FBA per-return cost is always an estimate.
-- `amazon_returns` server-side filtering by `sku` / `child_asin` currently returns 0 rows
-  (a known backend issue to raise with the returns-table owner) - always pull grouped and
-  filter client-side; the grouped output is correct.
+- Prefer pulling `amazon_returns` grouped and filtering client-side (you need the full
+  per-SKU reason histogram regardless). Server-side `sku` / `child_asin` filtering has
+  been unreliable historically; verify it returns rows before depending on it.
 - A DataDoe skill, built on DataDoe returns, sales/traffic, COGS and settlement data.
