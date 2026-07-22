@@ -137,12 +137,37 @@ Mine 3-4 star reviews for the real audience language and objections.
     `child_asin_add_to_cart_count`, `child_asin_purchase_count` +
     `search_query_total_purchase_count`, `child_asin_organic_search_rank`,
     `child_asin_median_click_price_value`/`_currency`.
-  - `amazon_products_by_child_asin` - current `product_name` (title),
-    `product_bullet_point_1..5`, `product_description`, `product_brand`, category,
-    BSR, `product_image_url`, `marketplace_country_code`.
-  - `amazon_listings_raw` - listing attributes, backend keywords, listing issues /
-    suppressions, and **which attribute fields are empty** (the "death of null" gap
-    COSMO penalises).
+  - `amazon_products_by_child_asin` (fallback / supplement for content) - `product_name`
+    (title), `product_bullet_point_1..5`, `product_description`, `product_brand`,
+    category, BSR, `product_image_url`, `marketplace_country_code`. Prefer
+    `amazon_listings_raw.attributes` for title/bullets/description/brand; use this for
+    category / BSR or when `attributes` is sparse.
+  - `amazon_listings_raw` (source id `6ea445cdc4`) - the real backend-keyword +
+    attribute source. One row per SKU/marketplace, a current snapshot (use `last_seen_at`
+    for freshness, not a time series). JSON columns: `attributes`, `summaries`, `issues`,
+    `offers`. Parse `attributes`:
+    - **Backend search terms** = `attributes.generic_keyword[].value` - an array of
+      `{language_tag, marketplace_id, value}`; `value` is Amazon's real "Search Terms"
+      blob (space-separated). Pick the entry matching the target `marketplace_id`. **No
+      `generic_keyword` key = the SKU has no backend terms at all** (a concrete miss).
+    - **Listing content** (richer than the catalog source): `item_name`, `bullet_point[]`,
+      `product_description` (HTML), `brand`, `color`, `size`, image locators
+      (`main_product_image_locator`, `other_product_image_locator_1..5`), `list_price`.
+    - **Empty-attribute gaps**: compare the `attributes` keys against what's expected for
+      the SKU's `summaries.productType` (types differ - `SHARP_PIN` carries far fewer
+      fields than `SHOE_INSERT`); an expected field absent or an empty array is a gap.
+    - **Health**: `issues[]` (`code`, `severity`, `categories`, `enforcements.actions`) -
+      flag suppressions so you don't "just add keywords" to a blocked listing.
+    - **Multiple SKUs per ASIN**: a `child_asin` + `marketplace_id` can have more than one
+      row - different seller SKUs for the same ASIN (new vs used, FBA vs FBM, a superseded
+      listing). Don't treat the first or richest row as canonical: check `summaries.status`
+      on each and audit the `BUYABLE` one(s) - that is what's actually live. If a
+      non-buyable sibling SKU carries better content (populated `generic_keyword`, fuller
+      `bullet_point` / `product_description`) than the buyable SKU(s), flag it explicitly:
+      the good copy exists but isn't on the listing that sells. Use
+      `summaries.lastUpdatedDate` to tell which is the newer edit.
+    Rows are large JSON - pull only the columns you need and download to a file; parse
+    programmatically, don't dump raw JSON into context.
   - `amazon_ads_search_terms_by_campaign_by_date` - converting ad search terms (keyword
     harvest the organic SQP set may miss).
   - `amazon_fba_inventory_health` (optional) - `your_price`, `featuredoffer_price`,
@@ -157,10 +182,14 @@ Mine 3-4 star reviews for the real audience language and objections.
 1. `sellers_and_vendors_list` -> pick the seller; get the target ASIN.
 2. `exports_sources_get` -> confirm sources; SQP is required, the rest degrade
    gracefully.
-3. **Current listing:** `exports_create` on `amazon_products_by_child_asin` (+
-   `amazon_listings_raw`) filtered to the ASIN -> title, bullets, description,
-   attributes, backend keywords, issues, `marketplace_country_code`. Read the
-   marketplace's caps now (Copy rules below).
+3. **Current listing:** `exports_create` on `amazon_listings_raw` (columns `sku`,
+   `child_asin`, `marketplace_id`, `attributes`, `summaries`, `issues`, `last_seen_at`)
+   filtered to the ASIN; download to a file and parse. From `attributes` read
+   `item_name`, `bullet_point[]`, `product_description`, `brand`; the backend terms from
+   `attributes.generic_keyword[].value` for the target `marketplace_id`; `productType`
+   from `summaries`; and `issues[]`. Fall back to `amazon_products_by_child_asin` for
+   title / bullets / category / BSR if `attributes` is sparse. Read the marketplace's
+   caps now (Copy rules below).
 4. **Funnel per query (the core):** `exports_create` on the SQP source for the ASIN
    over a full recent window (>= 8 weeks), grouped by `search_query`, pulling BOTH the
    `child_asin_*` and the `search_query_total_*` columns so you can benchmark against
@@ -176,9 +205,18 @@ Mine 3-4 star reviews for the real audience language and objections.
 8. **Harvest + competitive gap:** pull converting ad terms; if Brand Analytics is
    available, find terms where a competitor takes the #1-3 share you should own; else
    skip and note it.
-9. **Coverage + offer + health:** tokenise title + bullets + backend; flag high-value,
-   relevant terms not covered and empty attribute fields; check price vs
-   `featuredoffer_price` and `available` if pulled; flag listing issues/suppressions.
+9. **Coverage + backend-keyword + attribute audit:**
+   - Tokenise title + bullets + `attributes.generic_keyword[].value` (backend). Flag the
+     high-value SQP money-keywords (from step 4) that are absent from the backend string
+     - a concrete "add to your Search Terms" fix; if the SKU has no `generic_keyword` at
+     all, flag that as a clear miss.
+   - **Empty-attribute gaps:** for the SKU's `summaries.productType`, list expected fields
+     that are missing or empty (at minimum `bullet_point`, `product_description`,
+     `generic_keyword`, `main_product_image_locator`) - "death of null".
+   - Match everything by marketplace (`marketplace_id`) so a multi-marketplace ASIN's
+     keywords/attributes don't bleed across markets.
+   - Check price vs `featuredoffer_price` and `available` if pulled; flag listing
+     `issues[]` / suppressions (don't just add keywords to a blocked listing).
 10. **Rewrite (2026-compliant, upload-ready):**
     - **Title <= 75 chars**: brand first, then the single best-converting theme, then
       audience/use-case. One keyword each, no repetition, no promo/subjective words, no
@@ -305,6 +343,10 @@ days-to-weeks" plan - a diagnosis and the rewrite, not a keyword list.
 - Did I apply the relevance guard before putting any term in the title?
 - Do the 5 bullets each answer a question / cover a distinct dimension? Backend filled,
   no title repeats, no brand/competitor, within the byte cap? Empty attributes listed?
+- Did I read the actual backend terms from `attributes.generic_keyword[].value` (for the
+  right marketplace) and flag high-value SQP terms missing from them - or flag a SKU with
+  no `generic_keyword` at all?
+- Did I judge empty attributes against the SKU's `productType`, not a universal schema?
 - Did I flag the blind spots (image, A+, rating, price) and keep compliance text?
 - Did I give a measurement plan (one change first, days-to-weeks re-index, re-run)?
 
@@ -319,6 +361,13 @@ days-to-weeks" plan - a diagnosis and the rewrite, not a keyword list.
 - Leaving structured attribute fields empty ("death of null").
 - Blaming copy for a below-market CVR that is really reviews or price.
 - Ignoring listing issues/suppressions that block the listing regardless of copy.
+- Assuming a fixed attribute schema across product types - expected fields differ by
+  `productType`; judge gaps per type, and read backend terms from
+  `attributes.generic_keyword[].value` (per marketplace), not a guessed field.
+- Auditing whichever `amazon_listings_raw` row comes back first when an ASIN has multiple
+  seller SKUs - always check `summaries.status` and audit the `BUYABLE` one(s); a rich but
+  non-buyable sibling SKU is a real, easy-to-miss gap (good backend keywords sitting on a
+  listing nobody can buy).
 - Fluent AI-written copy with no structured intent signals - reads well, ranks poorly.
 - Changing everything at once, then judging before the days-to-weeks re-index.
 - Inventing medical/other restricted claims to win a keyword.
@@ -328,5 +377,6 @@ days-to-weeks" plan - a diagnosis and the rewrite, not a keyword list.
 - Read-only (analysis + copy). Applying the changes is a separate write skill via
   `AMAZON_LISTINGS_UPDATE` (dryRun-gated).
 - Tuned for 2026 Amazon: 75-char title cap, COSMO intent ranking, Rufus / Alexa for
-  Shopping. Built on DataDoe catalog, listing, SQP (with market benchmarks),
-  search-term, inventory and (when available) Brand Analytics data.
+  Shopping. Built on DataDoe SQP (with market benchmarks), listing attributes + backend
+  keywords (`amazon_listings_raw.attributes.generic_keyword`), catalog, search-term,
+  inventory and (when available) Brand Analytics data.
