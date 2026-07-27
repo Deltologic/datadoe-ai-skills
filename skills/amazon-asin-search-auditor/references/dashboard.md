@@ -46,7 +46,9 @@ node amazon-asin-search-auditor/scripts/render-dashboard.js \
 }
 ```
 
-Each `coreSearchSummaries[]` item must include `searchTerm`, `date`, `purchaseCount`, `impressions`, `clicks`, `organicRank`, `searchVolume`, and `searchImpressions`.
+Each `coreSearchSummaries[]` item must include `searchTerm`, `date`, `purchaseCount`, `impressions`, `clicks`, `sqpRelativeRank`, `searchVolume`, and `searchImpressions`.
+
+**`sqpRelativeRank` vs live SERP rank — do not conflate.** `sqpRelativeRank` comes from DataDoe's `child_asin_organic_search_rank`, which is a normalized SQP bucket ("relative to other search terms of the same ASIN"), **not** a literal search-results position. The per-result `organicRank` / `ppcRank` inside `searches[].organicRanks[]` / `ppcRanks[]` are the **live SERP positions** from the browser scrape. These two measure different things and routinely disagree for the same ASIN on the same day (e.g. SQP relative rank 1 vs live SERP rank 3) — never present them as directly comparable, and keep the field names distinct so the dashboard doesn't imply they are. (Older `report-data.json` using `organicRank` on core summaries still renders via a fallback, but new runs should emit `sqpRelativeRank`.)
 
 Each `searches[]` item is the marked search-result JSON from step 13 plus `screenshotLocation` or `screenshotLocation:`. Use a run-root-relative URL such as `search_results/screenshots/st-schuhdeo.png`; Search mode renders this as a `screenshot` button.
 

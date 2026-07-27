@@ -857,7 +857,9 @@
                                     h(
                                       "span",
                                       { className: "pill", key: "r" },
-                                      "organic #" + summary.organicRank,
+                                      "SQP rel. rank #" +
+                                        (summary.sqpRelativeRank ??
+                                          summary.organicRank),
                                     ),
                                     h(
                                       "span",
@@ -1294,9 +1296,9 @@
                 "Search page engagement",
               ),
               statBlock(
-                "Organic rank",
-                core?.organicRank ?? "n/a",
-                "Best rank from the core data",
+                "SQP relative rank",
+                core?.sqpRelativeRank ?? core?.organicRank ?? "n/a",
+                "SQP bucket (relative to this ASIN's terms) - NOT a live SERP position",
               ),
             ]),
           ),

@@ -31,7 +31,11 @@ metadata:
 3. (Spawn a sub-agent for these steps) Core term export normalizer:
     - Fetch the following top search terms data:
         - Source: `amazon_child_product_organic_search_ranks_per_week`.
-        - Total top 5 search terms by `child_asin_purchase_count` from the last 60 days.
+        - This source is **weekly-grain** (one row per ASIN/term/week), so a row is NOT a
+          unique term - `ORDER BY child_asin_purchase_count DESC LIMIT 5` returns 5 rows
+          that can dedupe to fewer terms. Pull a **larger limit (15-20 rows)** ordered by
+          `child_asin_purchase_count DESC` from the last 60 days, then take the first
+          **5 unique** search terms after dedup.
         - Add all other available metrics to the data.
         - Download the report to file using `exports_raw_url_get` method.
         - It is OK if there are fewer than 60 days of data.
@@ -83,9 +87,12 @@ metadata:
         }
     ```
 11. (Spawn a sub-agent for this step) Extract unique ASINs from all results for each search term using `scripts/list-asins.js`.
-12. (Spawn a sub-agent for this step) Fetch active listings for the seller using DataDoe and save it to CSV (include only ASINs):
+12. (Spawn a sub-agent for this step) Fetch the seller's active listings **for the candidate ASINs only** (the unique ASINs from step 11 / `asins.json`) using DataDoe, and save to CSV:
     - Source: `amazon_listings_with_cogs`.
-    - Paginate if the seller has more listings than the Export limit.
+    - Filter: `child_asin IN [the step-11 candidate ASINs]` AND `listing_status = Active`.
+    - This targets the few dozen ASINs from the search results, so it **never hits the 3,500-row export cap and needs no pagination** - correct regardless of catalog size. Do NOT dump the whole catalog: an unordered `listing_status = Active` pull on a large catalog can drop an actively-selling owned ASIN off page 1, which then reads as "not mine" and shows a competitor beating a rank that is actually yours.
+    - Request `child_asin` in the columns. DataDoe prepends 8 utility columns before `child_asin`, so downstream parsing must be **header-based, not column-position** (see `scripts/mark-my-listings.js`).
+    - (Fallback, only if a full-catalog snapshot is ever required: add a deterministic `orderByColumn` and loop - "while returned rowCount == limit, repeat with skip += limit" - so the cap never silently drops rows.)
 13. (Spawn a sub-agent for these steps) Run the file-based post-processor for the step 11 ASIN list, step 12 listings export, and the dashboard build:
     - Mark my listings in JSONs using `scripts/mark-my-listings.js`.
     - Generate `report-data.json`.

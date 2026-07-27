@@ -1,5 +1,5 @@
-// extract-asins.js
-// Usage: node extract-asins.js ./json-input-dir
+// list-asins.js
+// Usage: node list-asins.js ./json-input-dir
 // Output: asins.json
 
 import { existsSync, statSync, readdirSync, readFileSync, writeFileSync } from "fs";
