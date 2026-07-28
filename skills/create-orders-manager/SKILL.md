@@ -39,7 +39,7 @@ Determine your agent type before starting:
 ### 2. Orders Table
 
 - Display orders in a table with expandable nested rows for line items.
-- Parent row: `amazon_order_id`, `order_date`, `order_status`, `fulfillment_channel`, total item count, total price.
+- Parent row: `amazon_order_id`, `order_date`, `amazon_order_status`, `fulfillment_channel`, total item count, total price.
 - Child rows (expanded): `sku`, `child_asin`, `product_name`, `quantity`, `item_price_value`, `item_price_currency`, `item_status`.
 - Client-side pagination with configurable page size (10/25/50).
 
@@ -123,8 +123,8 @@ Filter to items where `sellerCentralConnection` is not null.
 GET /api/v1/exports/sources?sellerOrVendorIds=<sellerId>
 ```
 
-Find the source named `Order Line Items` (type `SELLER_CENTRAL`).
-Hardcode fallback ID: `89b27535d27c2a94db5ae39af4717f542624ff4df7802fd633e16c78674a1778`
+Find the source named `Order Line Items` (type `SELLER_CENTRAL`) and use the `id` it returns — **always prefer the resolved id**.
+Canonical id (live-verified): `89b27535d2`. Keep any hardcoded value only as a last-resort fallback, and confirm the exact id form against `GET /api/v1/exports/sources` during the REST test (the REST surface may format the id differently than MCP).
 
 **3. Create export**
 
@@ -137,11 +137,11 @@ Request body:
 ```json
 {
   "sellerOrVendorIds": ["<sellerId>"],
-  "sourceId": "89b27535d27c2a94db5ae39af4717f542624ff4df7802fd633e16c78674a1778",
+  "sourceId": "89b27535d2",
   "columns": [
     "amazon_order_id",
     "order_date",
-    "order_status",
+    "amazon_order_status",
     "fulfillment_channel",
     "sku",
     "line_item_number",
@@ -167,13 +167,13 @@ To filter by status, add `filters`:
     "combinator": "or",
     "rules": [
       {
-        "field": "order_status",
+        "field": "amazon_order_status",
         "operator": "=",
         "value": "Shipped",
         "not": false
       },
       {
-        "field": "order_status",
+        "field": "amazon_order_status",
         "operator": "=",
         "value": "Pending",
         "not": false
@@ -214,8 +214,8 @@ Example row returned in the flat array:
   "amazon_order_id": "203-5492174-4518714",
   "sku": "341_SDA12D_117_FBA",
   "line_item_number": 0,
-  "order_date": null,
-  "order_status": "Shipped",
+  "order_date": "2026-06-22",
+  "amazon_order_status": "Shipped",
   "fulfillment_channel": "Amazon",
   "child_asin": "ABCDEFGHIJ",
   "product_name": "xyz",
@@ -232,45 +232,45 @@ For the full column reference, see: https://api.datadoe.com/api/v1/spec/data-sch
 
 The `/raw` endpoint returns a **flat array of line items**. Each element represents one SKU within one order. An order with N distinct SKUs produces N rows all sharing the same `amazon_order_id`.
 
-**CRITICAL — `columns: []` (empty array) does NOT return all columns.** It returns only implicit seller-context metadata columns (`seller_id`, `seller_name`, `amazon_selling_partner_id`, `marketplace_name`, etc.) and none of the Order Line Items fields (`amazon_order_id`, `sku`, `order_status`, etc.). Always specify the required columns explicitly.
+**CRITICAL — `columns: []` (empty array) does NOT return all columns.** It returns only implicit seller-context metadata columns (`seller_id`, `seller_name`, `amazon_selling_partner_id`, `marketplace_name`, etc.) and none of the Order Line Items fields (`amazon_order_id`, `sku`, `amazon_order_status`, etc.). Always specify the required columns explicitly. Every response also **prepends 8 utility columns** (`seller_id` … `marketplace_name`) before your requested fields, so read values by **key/name, never by column position**.
 
 **Field roles:**
 
 | Field                 | Level     | Notes                                                             |
 | --------------------- | --------- | ----------------------------------------------------------------- |
 | `amazon_order_id`     | Order     | Grouping key — unique per order                                   |
-| `order_status`        | Order     | Consistent across all rows for the same order                     |
+| `amazon_order_status`        | Order     | Consistent across all rows for the same order                     |
 | `fulfillment_channel` | Order     | Consistent across all rows for the same order                     |
-| `order_date`          | Order     | **Always `null` in practice** — do not use for display or sorting |
+| `order_date`          | Order     | Purchase date — **populated** (duplicate of `date`; prefer `date` for from/to filtering). Consistent per order |
 | `sku`                 | Line item | Unique product identifier within the order                        |
 | `line_item_number`    | Line item | 0-based index of the line item within the order                   |
 | `child_asin`          | Line item | Amazon ASIN                                                       |
 | `product_name`        | Line item | Full product name                                                 |
-| `item_status`         | Line item | Can differ from `order_status`                                    |
+| `item_status`         | Line item | Can differ from `amazon_order_status`                                    |
 | `quantity`            | Line item | Units for this SKU only                                           |
-| `item_price_value`    | Line item | Unit price (multiply by `quantity` for line total)                |
+| `item_price_value`    | Line item | **Line-item total value — already includes quantity; use as-is, do NOT multiply by `quantity`** |
 | `item_price_currency` | Line item | Consistent across all rows for the same order                     |
 
 **How to build the parent (order) row from the flat array:**
 
 ```typescript
-// Group by amazon_order_id — preserve API row order (order_date is always null)
+// Group by amazon_order_id. item_price_value is already the line TOTAL — sum it as-is.
 const ordersMap = new Map<string, OrderRow>();
 
 for (const item of lineItems) {
   const existing = ordersMap.get(item.amazon_order_id);
   if (existing) {
     existing.lineItems.push(item);
-    existing.totalPrice += item.item_price_value * item.quantity;
+    existing.totalPrice += item.item_price_value; // line total, NOT × quantity
     existing.itemCount += item.quantity;
   } else {
     ordersMap.set(item.amazon_order_id, {
       amazon_order_id: item.amazon_order_id,
-      order_status: item.order_status, // order-level, consistent
+      amazon_order_status: item.amazon_order_status, // order-level, consistent
       fulfillment_channel: item.fulfillment_channel, // order-level, consistent
-      order_date: item.order_date, // null — show "—" or omit
+      order_date: item.order_date, // populated purchase date
       currency: item.item_price_currency, // consistent per order
-      totalPrice: item.item_price_value * item.quantity,
+      totalPrice: item.item_price_value, // line total, NOT × quantity
       itemCount: item.quantity,
       lineItems: [item],
     });
@@ -278,8 +278,8 @@ for (const item of lineItems) {
 }
 
 const orders = Array.from(ordersMap.values());
-// Do NOT sort by order_date — it is always null.
-// Preserve insertion order (API natural order) or sort by amazon_order_id alphabetically.
+// order_date is populated — sort by it (newest first) if desired,
+// or preserve insertion order (API natural order).
 ```
 
 **Parent row columns to display:**
@@ -287,11 +287,11 @@ const orders = Array.from(ordersMap.values());
 | Column     | Source                                | Display                |
 | ---------- | ------------------------------------- | ---------------------- |
 | Order ID   | `amazon_order_id`                     | Monospace, full string |
-| Order Date | `order_date`                          | Always null → show `—` |
-| Status     | `order_status` (first item)           | Coloured badge         |
+| Order Date | `order_date`                          | Purchase date          |
+| Status     | `amazon_order_status` (first item)    | Coloured badge         |
 | Channel    | `fulfillment_channel` (first item)    | Badge                  |
 | Items      | `sum(quantity)` across all line items | Number                 |
-| Total      | `sum(item_price_value × quantity)`    | Formatted currency     |
+| Total      | `sum(item_price_value)` (already line totals) | Formatted currency |
 | Tags       | localStorage only                     | Tag chips              |
 
 **Child (line item) row columns to display:**
@@ -591,8 +591,10 @@ export default instance;
 ```typescript
 import client from "./client";
 
-const ORDER_LINE_ITEMS_SOURCE_ID =
-  "89b27535d27c2a94db5ae39af4717f542624ff4df7802fd633e16c78674a1778";
+// Canonical id (live-verified). Always prefer the id resolved from
+// GET /exports/sources; this is only a last-resort fallback. Confirm the exact id
+// form on the REST surface during testing.
+const ORDER_LINE_ITEMS_SOURCE_ID = "89b27535d2";
 
 export async function fetchSellersAndVendors() {
   const response = await client.get<{ items: any[] }>(
@@ -625,7 +627,7 @@ export async function fetchOrderLineItemsSourceId(
 const ORDER_LINE_ITEMS_COLUMNS = [
   "amazon_order_id",
   "order_date",
-  "order_status",
+  "amazon_order_status",
   "fulfillment_channel",
   "sku",
   "line_item_number",
@@ -664,7 +666,7 @@ export async function createExport(
     body.filters = {
       combinator: "or",
       rules: orderStatusFilters.map((status) => ({
-        field: "order_status",
+        field: "amazon_order_status",
         operator: "=",
         value: status,
         not: false,
