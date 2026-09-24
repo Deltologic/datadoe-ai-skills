@@ -41,32 +41,56 @@ Work top-down, then find the leaks:
 ## Configuration
 
 - MCP base: `https://mcp.datadoe.com/mcp/v1`
-- Data source: `Profit by SKU & Date` (table `amazon_profit_by_sku_and_date`). Premium table; already pre-joins settlements +
-  COGS + ads, so you do NOT recompute profit yourself - trust the `profit` column.
-- Currency/marketplace: read `currency` / `marketplace_country_code` and localise
-  (e.g. a German marketplace = EUR). Keep `currency` in the `groupBy` and report per
-  currency - EU/pan-EU accounts can span currencies; never sum across them.
-- **Window: use a full month or longer.** Amazon fees settle in batches (by
-  settlement date, not sale date), so a few days or a single week can badly misstate
-  profit/margin - a fee batch can land in one period and make it look terrible, or an
-  un-settled period look great. A whole month smooths this; flag any single SKU whose
-  margin looks extreme and check it isn't a settlement-timing artifact.
+- Account P&L: `Profit by Date` (`amazon_profit_by_date`). This is the account number.
+  It includes every campaign type in `ad_spend`, and unallocated fees (storage, inbound,
+  subscription, and similar posted-date fees) land here. Trust `profit`. Do not rebuild
+  it from `amazon_settlements_with_cogs`.
+- SKU P&L: `Profit by SKU & Date` (`amazon_profit_by_sku_and_date`). Use it only for
+  the per-SKU ranking. Its `ad_spend` is Sponsored Products and Sponsored Display,
+  same-SKU attribution only. **Do not sum this table's `profit` and call it account
+  profit.** That sum will not equal `amazon_profit_by_date.profit`.
+- Both tables are premium. Filter on `date` (marketplace-local profit date). Do not
+  filter `order_date`: posted-date fees have no order date and a filter on it drops them.
+  `groupBy` must not be empty. `groupBy: []` returns zero rows.
+- `total_fees`, `fba_fees`, `total_selling_fees`, `cogs_total`, and `ad_spend` are
+  positive costs. `profit` is already `total_sales - total_fees - cogs_total - ad_spend
+  + refund_cost`. Do not add `total_selling_fees` or `fba_fees` on top of `total_fees`.
+  `total_sales` is shipped item price plus shipping, minus shipping promotions. It does
+  not include item tax.
+- Currency: keep `currency` in every `groupBy` and report per currency. Never sum
+  across currencies. COGS is the amount the seller entered on `amazon_cogs`
+  (`cost_item_value`, `cost_item_shipping_value`, `cost_currency`). It is not converted.
+  If `cost_currency` is not the marketplace currency, convert `cogs_total` before you
+  compare it with sales, and state the rate. A margin near 100% usually means COGS
+  was not uploaded.
+- **Window: use a full month or longer.** Fees post on settlement date, so a few days
+  or one week can misstate margin. Flag a SKU whose margin looks extreme and check
+  it is not a settlement-timing artifact.
 
 ## Step-by-step workflow (MCP-native)
 
 1. `sellers_and_vendors_list` -> pick the seller, keep `sellerOrVendorId`.
-2. `exports_sources_get` (query "profit") -> confirm source `amazon_profit_by_sku_and_date` is `enabled`.
-3. `exports_create` for `amazon_profit_by_sku_and_date`, the requested date window, aggregated per SKU:
+2. `exports_sources_get` (query "profit") -> confirm `amazon_profit_by_date` and
+   `amazon_profit_by_sku_and_date` are `enabled`.
+3. **Account headline:** `exports_create` on `amazon_profit_by_date` for the window:
+   - `groupBy`: `["currency"]`
+   - `aggregations` (sum): `total_sales`, `profit`, `total_cost`, `ad_spend`,
+     `total_fees`, `cogs_total`, `total_units_sold`
+   Do NOT sum `acos` / `tacos` / `roi`. Recompute margin as profit / sales.
+4. **SKU ranking:** `exports_create` on `amazon_profit_by_sku_and_date` for the same
+   window:
    - `groupBy`: `["sku","product_name","currency"]`
    - `aggregations` (sum): `total_sales`, `profit`, `total_cost`, `ad_spend`,
      `total_fees`, `cogs_total`, `total_units_sold`
    - `orderByColumn` the profit-sum alias, `DESC`; `limit` ~200.
-   Do NOT sum `acos`/`tacos`/`roi` (they are ratios) - recompute them from the
-   summed columns if needed (e.g. margin% = profit / sales).
-4. Poll `exports_get`, then `exports_raw_download`.
-5. Compute: blended margin = sum(profit)/sum(sales). Flag leaks: `profit < 0`, or
-   SKU margin < 0.5x blended margin, or `ad_spend > profit`.
-6. Render the card.
+5. If COGS looks wrong, `exports_create` on `amazon_cogs` and read `cost_currency`,
+   `cost_item_value`, and `cost_item_shipping_value` for the SKUs in question.
+6. Poll `exports_get`, then `exports_raw_download`.
+7. Headline numbers come from step 3 only. Flag SKU leaks from step 4: `profit < 0`,
+   SKU margin < 0.5x the account margin, or `ad_spend` above profit. Say that SKU
+   ad spend omits Sponsored Brands and other campaign types that are in the account
+   `ad_spend`.
+8. Render the card.
 
 ## Output format
 
@@ -96,21 +120,27 @@ data-quality leak, alongside genuinely thin/negative-profit SKUs, is the point.
 
 ## Quality self-check
 
-- Did I rank by profit, not sales?
+- Did the headline come from `amazon_profit_by_date`, not a sum of SKU profit?
+- Did I rank SKUs by profit, not sales?
 - Did I recompute margin/ACoS from summed columns (never sum a ratio)?
 - Did I sanity-check suspiciously high margins for missing COGS?
 - Is money in the right currency?
 
 ## Common mistakes
 
+- Summing `amazon_profit_by_sku_and_date.profit` and presenting it as account profit.
 - Summing `acos`/`tacos`/`roi` columns - they are per-row ratios, meaningless summed.
-- Reporting sales as "profit". Use the `profit` column.
-- Treating a 99% margin as real - usually COGS not uploaded for that SKU.
-- Ignoring ad spend - a SKU can be "profitable" pre-ads and a loss after.
+- Adding `total_selling_fees` or `fba_fees` on top of `total_fees`.
+- Filtering posted fees away with `order_date`, or sending `groupBy: []`.
+- Reporting sales as "profit". Use the `profit` column from `amazon_profit_by_date`.
+- Treating a 99% margin as real - usually COGS was not uploaded, or `cost_currency`
+  is not the marketplace currency.
+- Ignoring ad spend - a SKU can be profitable before ads and a loss after. SKU
+  `ad_spend` still misses Sponsored Brands; the account figure does not.
 
 ## Notes
 
 - Read-only. Never writes to the account.
-- `amazon_profit_by_sku_and_date` already blends settlements + COGS + ads, so it is
-  the canonical profit source - do not rebuild P&L from raw orders/settlements.
-- A DataDoe skill, built on the DataDoe Profit by SKU source.
+- Account profit is `amazon_profit_by_date`. SKU profit is
+  `amazon_profit_by_sku_and_date`. Do not rebuild the P&L from settlements.
+- A DataDoe skill, built on the DataDoe profit tables.
