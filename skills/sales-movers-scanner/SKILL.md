@@ -44,7 +44,7 @@ recent window to the prior equal window, then for each big mover decompose:
    (a 5% drop on a hero SKU beats a 90% drop on a trickle SKU). Look at gainers AND
    decliners.
 2. **Decompose the driver** for each mover:
-   - **Traffic** - `sessions` (or `page_views`) down/up -> visibility/rank/ads change,
+   - **Traffic** - `session` (or `page_views`) down/up -> visibility/rank/ads change,
      a suppression, or seasonality. Sales followed the traffic.
    - **Conversion** - `units_session_percentage` (unit session rate) down/up while
      traffic held -> listing/price/reviews/offer problem or win.
