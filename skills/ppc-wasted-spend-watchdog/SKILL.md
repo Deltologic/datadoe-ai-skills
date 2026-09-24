@@ -41,6 +41,31 @@ negative-keyword workflow.
 Sort each by spend so the biggest euros come first. (For account-level TACoS trend,
 use the Weekly Business Review skill - this one is term-level.)
 
+Do not recommend a base-bid cut from the blended search-term ACoS alone. A campaign
+ACoS mixes placements and audiences. Check modifiers first, for every campaign you
+would negate or cut:
+
+1. **Placement performance** — `amazon_ads_placement_by_campaign_by_date`, grouped by
+   `ad_campaign_id` and `ad_placement_classification`. Sum `ad_spend`, `ad_clicks`,
+   `ad_orders`, `ad_sales`. Recompute ACoS per placement.
+2. **Placement bid adjustments** — `amazon_ads_campaigns_raw`.
+   `ad_campaign_optimization_placement_bid_adjustments` is JSON of
+   `{percentage, placement}` (`TOP_OF_SEARCH`, `REST_OF_SEARCH`, `PRODUCT_PAGE`).
+   `ad_campaign_optimization_bid_strategy` changes how that percentage is applied.
+3. **Shopper cohort and segment adjustments** — same raw campaign row:
+   `ad_campaign_optimization_shopper_segment_bid_adjustment` and
+   `ad_campaign_optimization_shopper_cohort_bid_adjustment`. These stack with the
+   placement modifier. Effective ceiling is base bid × (1 + placement%) × (1 + audience%).
+4. **Audience-segment performance** — `amazon_ads_audiences_by_date` (Sponsored
+   Products and Sponsored Brands). Group by `ad_campaign_id` and
+   `ad_audience_segment_name`. Sum `ad_spend`, `ad_clicks`, `ad_orders`, `ad_sales`.
+   Do not add these rows to campaign or search-term totals (they double-count).
+   Segments can overlap, so a segment versus the campaign total is directional.
+
+If one placement or one audience carries the orders, leave that modifier alone and
+cut only the weak placement, or the terms that are not in that segment. Say which
+modifier you checked in the recommendation.
+
 ## Configuration
 
 - MCP base: `https://mcp.datadoe.com/mcp/v1`
@@ -71,8 +96,11 @@ use the Weekly Business Review skill - this one is term-level.)
 5. (Optional) pull `amazon_ads_targeting_by_campaign_by_date` for the keyword-level
    view (which bid keyword each wasteful term maps to). Current bids for a cut come
    from the bid-optimizer skill via `AMAZON_ADS_TARGETS_FIND`, not this table.
-6. Render, biggest euros first. Hand the dead terms to `ppc-negative-keyword-applier`
-   and the bleeders to `ppc-bid-optimizer-apply`.
+6. For each campaign you would cut or negate, pull placement performance, the raw
+   campaign bid adjustments, and `amazon_ads_audiences_by_date` as in the modifier
+   checks above. Name the placement or audience that should be left alone.
+7. Render, biggest euros first. Hand the dead terms to `ppc-negative-keyword-applier`
+   and the bleeders to `ppc-bid-optimizer-apply`, with the modifier note attached.
 
 ## Output format
 
@@ -105,6 +133,8 @@ opposite decisions - the skill separates the two.
 - Did I use enough clicks before calling a term "dead" (>= ~10)?
 - Is ACoS computed per term from summed spend/sales, not a summed ratio?
 - Did I rank by euros wasted, not count?
+- Before a bid cut, did I check placement ACoS, placement and audience modifiers,
+  and `amazon_ads_audiences_by_date`?
 
 ## Common mistakes
 

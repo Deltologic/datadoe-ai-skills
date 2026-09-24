@@ -39,7 +39,7 @@ Determine your agent type before starting:
 ### 2. Orders Table
 
 - Display orders in a table with expandable nested rows for line items.
-- Parent row: `amazon_order_id`, `order_date`, `order_status`, `fulfillment_channel`, total item count, total price.
+- Parent row: `amazon_order_id`, `date`, `amazon_order_status`, `fulfillment_channel`, total item count, total price.
 - Child rows (expanded): `sku`, `child_asin`, `product_name`, `quantity`, `item_price_value`, `item_price_currency`, `item_status`.
 - Client-side pagination with configurable page size (10/25/50).
 
@@ -140,8 +140,8 @@ Request body:
   "sourceId": "89b27535d27c2a94db5ae39af4717f542624ff4df7802fd633e16c78674a1778",
   "columns": [
     "amazon_order_id",
-    "order_date",
-    "order_status",
+    "date",
+    "amazon_order_status",
     "fulfillment_channel",
     "sku",
     "line_item_number",
@@ -167,13 +167,13 @@ To filter by status, add `filters`:
     "combinator": "or",
     "rules": [
       {
-        "field": "order_status",
+        "field": "amazon_order_status",
         "operator": "=",
         "value": "Shipped",
         "not": false
       },
       {
-        "field": "order_status",
+        "field": "amazon_order_status",
         "operator": "=",
         "value": "Pending",
         "not": false
@@ -208,14 +208,14 @@ Example row returned in the flat array:
 
 ```json
 {
-  "seller_id": "54fa3cs2-b69f-4642-82c4-58fe731eed69",
-  "seller_name": "DataDoe UK",
-  "marketplace_name": "United Kingdom",
+  "seller_or_vendor_id": "54fa3cs2-b69f-4642-82c4-58fe731eed69",
+  "seller_or_vendor_name": "DataDoe UK",
+  "marketplace_country_name": "United Kingdom",
   "amazon_order_id": "203-5492174-4518714",
   "sku": "341_SDA12D_117_FBA",
   "line_item_number": 0,
-  "order_date": null,
-  "order_status": "Shipped",
+  "date": "2025-01-12",
+  "amazon_order_status": "Shipped",
   "fulfillment_channel": "Amazon",
   "child_asin": "ABCDEFGHIJ",
   "product_name": "xyz",
@@ -232,21 +232,21 @@ For the full column reference, see: https://api.datadoe.com/api/v1/spec/data-sch
 
 The `/raw` endpoint returns a **flat array of line items**. Each element represents one SKU within one order. An order with N distinct SKUs produces N rows all sharing the same `amazon_order_id`.
 
-**CRITICAL — `columns: []` (empty array) does NOT return all columns.** It returns only implicit seller-context metadata columns (`seller_id`, `seller_name`, `amazon_selling_partner_id`, `marketplace_name`, etc.) and none of the Order Line Items fields (`amazon_order_id`, `sku`, `order_status`, etc.). Always specify the required columns explicitly.
+**CRITICAL — `columns: []` (empty array) does NOT return all columns.** It returns only seller-context columns (`seller_or_vendor_id`, `seller_or_vendor_name`, `marketplace_seller_id`, `marketplace_country_name`, etc.) and none of the Order Line Items fields (`amazon_order_id`, `sku`, `amazon_order_status`, etc.). Always specify the required columns explicitly.
 
 **Field roles:**
 
 | Field                 | Level     | Notes                                                             |
 | --------------------- | --------- | ----------------------------------------------------------------- |
 | `amazon_order_id`     | Order     | Grouping key — unique per order                                   |
-| `order_status`        | Order     | Consistent across all rows for the same order                     |
+| `amazon_order_status`        | Order     | Consistent across all rows for the same order                     |
 | `fulfillment_channel` | Order     | Consistent across all rows for the same order                     |
-| `order_date`          | Order     | **Always `null` in practice** — do not use for display or sorting |
+| `date`                | Order     | Purchase date in the marketplace timezone. Use this for display and sorting. `order_date` duplicates `date`. |
 | `sku`                 | Line item | Unique product identifier within the order                        |
 | `line_item_number`    | Line item | 0-based index of the line item within the order                   |
 | `child_asin`          | Line item | Amazon ASIN                                                       |
 | `product_name`        | Line item | Full product name                                                 |
-| `item_status`         | Line item | Can differ from `order_status`                                    |
+| `item_status`         | Line item | Can differ from `amazon_order_status`                                    |
 | `quantity`            | Line item | Units for this SKU only                                           |
 | `item_price_value`    | Line item | Unit price (multiply by `quantity` for line total)                |
 | `item_price_currency` | Line item | Consistent across all rows for the same order                     |
@@ -254,7 +254,7 @@ The `/raw` endpoint returns a **flat array of line items**. Each element represe
 **How to build the parent (order) row from the flat array:**
 
 ```typescript
-// Group by amazon_order_id — preserve API row order (order_date is always null)
+// Group by amazon_order_id. Sort parent rows by date (purchase date).
 const ordersMap = new Map<string, OrderRow>();
 
 for (const item of lineItems) {
@@ -266,9 +266,9 @@ for (const item of lineItems) {
   } else {
     ordersMap.set(item.amazon_order_id, {
       amazon_order_id: item.amazon_order_id,
-      order_status: item.order_status, // order-level, consistent
+      amazon_order_status: item.amazon_order_status, // order-level, consistent
       fulfillment_channel: item.fulfillment_channel, // order-level, consistent
-      order_date: item.order_date, // null — show "—" or omit
+      date: item.date, // purchase date in the marketplace timezone
       currency: item.item_price_currency, // consistent per order
       totalPrice: item.item_price_value * item.quantity,
       itemCount: item.quantity,
@@ -278,8 +278,7 @@ for (const item of lineItems) {
 }
 
 const orders = Array.from(ordersMap.values());
-// Do NOT sort by order_date — it is always null.
-// Preserve insertion order (API natural order) or sort by amazon_order_id alphabetically.
+// Sort by date descending. date is the purchase date. order_date is the same value.
 ```
 
 **Parent row columns to display:**
@@ -287,8 +286,8 @@ const orders = Array.from(ordersMap.values());
 | Column     | Source                                | Display                |
 | ---------- | ------------------------------------- | ---------------------- |
 | Order ID   | `amazon_order_id`                     | Monospace, full string |
-| Order Date | `order_date`                          | Always null → show `—` |
-| Status     | `order_status` (first item)           | Coloured badge         |
+| Order Date | `date`                                | Purchase date          |
+| Status     | `amazon_order_status` (first item)           | Coloured badge         |
 | Channel    | `fulfillment_channel` (first item)    | Badge                  |
 | Items      | `sum(quantity)` across all line items | Number                 |
 | Total      | `sum(item_price_value × quantity)`    | Formatted currency     |
@@ -620,12 +619,12 @@ export async function fetchOrderLineItemsSourceId(
 
 // Required columns for the Order Line Items source.
 // NEVER pass columns: [] — an empty array returns only seller-context metadata
-// (seller_id, seller_name, marketplace_name, etc.) with NO order fields,
+// (seller_or_vendor_id, seller_or_vendor_name, marketplace_country_name, etc.) with NO order fields,
 // which causes the table to display empty rows.
 const ORDER_LINE_ITEMS_COLUMNS = [
   "amazon_order_id",
-  "order_date",
-  "order_status",
+  "date",
+  "amazon_order_status",
   "fulfillment_channel",
   "sku",
   "line_item_number",
@@ -664,7 +663,7 @@ export async function createExport(
     body.filters = {
       combinator: "or",
       rules: orderStatusFilters.map((status) => ({
-        field: "order_status",
+        field: "amazon_order_status",
         operator: "=",
         value: status,
         not: false,

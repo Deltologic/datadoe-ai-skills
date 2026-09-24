@@ -44,24 +44,29 @@ Report the first gate that fails, biggest-revenue SKU first.
 
 - MCP base: `https://mcp.datadoe.com/mcp/v1`
 - Data sources (no dedicated buy-box table - synthesize):
-  - `Profit by SKU & Date` (`amazon_profit_by_sku_and_date`) - `buybox_percentage`, `total_sales`,
-    `page_views`, per SKU/day.
-  - `FBA Inventory Health` (`amazon_fba_inventory_health`) - `your_price`, `sales_price`,
-    `featuredoffer_price`, `lowest_price_new_plus_shipping`, `available`.
+  - `Sales & Traffic by ASIN & Date` (`amazon_sales_and_traffic_with_cogs`) - `buybox_percentage`,
+    `total_sales`, `page_views`, `total_units`, `child_asin`, `product_name`. This table
+    has no `sku` column.
+  - `FBA Inventory Health` (`amazon_fba_inventory_health`) - `sku`, `child_asin`, `your_price`,
+    `sales_price`, `featuredoffer_price`, `lowest_price_new_plus_shipping`, `available`.
 - Currency/marketplace: localise (e.g. a German marketplace = EUR).
 
 ## Step-by-step workflow (MCP-native)
 
 1. `sellers_and_vendors_list` -> pick the seller.
-2. `exports_sources_get` -> confirm `amazon_profit_by_sku_and_date` + `amazon_fba_inventory_health` enabled.
-3. `exports_create` on `amazon_profit_by_sku_and_date`, last 30d: `groupBy [sku, product_name]`,
-   `avg buybox_percentage` (alias bb), `sum total_sales`, `sum page_views`. Filter
-   `total_units_sold > 0`. This finds SKUs with traffic/sales but low buy-box %.
-4. `exports_create` on `amazon_fba_inventory_health`, latest snapshot: `sku`, `your_price`,
+2. `exports_sources_get` -> confirm `amazon_sales_and_traffic_with_cogs` + `amazon_fba_inventory_health` enabled.
+3. `exports_create` on `amazon_sales_and_traffic_with_cogs`, last 30d: `groupBy [child_asin, product_name]`,
+   `avg buybox_percentage` (alias bb), `sum total_sales`, `sum page_views`, `sum total_units`.
+   Keep rows with `total_units > 0`. This finds ASINs with traffic/sales but low buy-box %.
+4. `exports_create` on `amazon_fba_inventory_health`, latest snapshot: `sku`, `child_asin`, `your_price`,
    `featuredoffer_price`, `lowest_price_new_plus_shipping`, `available`.
-5. Join the two on `sku`. For each low-bb SKU (bb < ~90 with meaningful sales),
-   diagnose: price gap = `your_price - featuredoffer_price` (>0 -> priced out);
-   `available = 0` -> stock; else -> fulfilment/health check.
+5. Join inventory onto the ASIN. `amazon_fba_inventory_health` can have several SKUs
+   for one `child_asin`. Do not collapse those rows or average `your_price`.
+   - Price: for each SKU with a non-null `your_price`, gap = `your_price - featuredoffer_price`.
+     Report the SKU that is actually in stock (`available` > 0). If several are in stock,
+     show each SKU's gap. A gap above 0 means priced out.
+   - Stock: only when every SKU for that ASIN has `available` = 0.
+   - Otherwise: fulfilment/health check.
 6. Rank by sales at risk (sales x (1 - bb/100)) and render.
 
 ## Output format
