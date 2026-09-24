@@ -16,11 +16,12 @@ Analyze the search performance of that ASIN and review its visibility in Amazon 
 # Details
 - We are working only on that one ASIN and only in the one specific Amazon marketplace.
 - Start by analyzing the search performance data for that ASIN presented in the JSON files provided by the super agent.
-- In addition to that, fetch raw listing data for that ASIN from DataDoe using the `amazon_listings_raw` source:
-    - Save this data to file using the `exports_raw_url_get` tool from DataDoe, as the result may be large.
-    - Use it to inspect all available listing content, including title, bullet points, description, A+ / enhanced content, images, and backend search term / generic keyword fields if available.
-    - If raw listing data is unavailable, continue with the Amazon page and search result data, clearly mark which fields could not be assessed, and do not infer hidden fields.
-    - If A+ / enhanced content, backend terms, images, or any other listing area is unavailable in the data, state that limitation in the report and base recommendations only on visible or fetched evidence.
+- Fetch listing content from both DataDoe tables, then the live product page. Do not treat a missing export as "the listing has no description" or "no A+".
+    - `amazon_products_by_child_asin` for this ASIN and marketplace: `product_name`, `product_bullet_point_1` through `product_bullet_point_5`, `product_description`, `product_image_url`, `product_brand`. This is the catalog description and bullets. Score Description from `product_description` even when `amazon_listings_raw` has no rows.
+    - `amazon_listings_raw` for this ASIN: download with `exports_raw_url_get` (rows are large JSON). Backend search terms are `attributes.generic_keyword`, not a column. Title and bullets in that payload are `attributes.item_name` and `attributes.bullet_point`. Also read `summaries` and `issues`.
+    - If `amazon_listings_raw` returns zero rows, say the Listings source returned no rows for this connection and score Backend Search Terms as not assessed. Still score title, bullets, and description from the catalog table and the live page.
+    - A+ / enhanced brand content is not in any DataDoe table. Open the product page in the browser and score A+ from what is on the page. An empty export is not evidence that A+ is missing.
+    - The catalog `product_image_url` is the main image only. Score the rest of the image stack from the live page.
 - For context, fetch from DataDoe:
     - Profitability of that ASIN from the last 64 days aggregated by week. Use `amazon_profit_by_sku_and_date`: `date`, `child_asin`, `sku`, `product_name`, `currency`, `total_sales`, `profit`, `total_units_sold`, `ad_spend`.
     - Latest available row for this ASIN from `amazon_child_product_search_performance_per_month`: `date`, `child_asin`, `search_impression_count`, `search_click_count`, `search_click_rate`, `search_cart_add_count`, `search_purchase_count`, `search_conversion_rate`.
@@ -47,8 +48,8 @@ Analyze the search performance of that ASIN and review its visibility in Amazon 
     - For Title, reference the exact product type, use case, audience, or context phrases found or missing.
     - For Bullet Points, reference the concrete benefit, scenario, audience, compatibility, or occasion claims found or missing.
     - For Images & Visual Proof, reference what the visible images prove or fail to prove, such as use case, result, scale, compatibility, or audience fit.
-    - For Description / A+, reference the broader context, lifestyle, motivation, use case, and differentiation content found or missing.
-    - For Backend Search Terms, summarize the visible backend/generic keyword themes if available; if not available, state that the area could not be directly inspected.
+    - For Description, quote `product_description` and what the live page adds. Score A+ only from modules visible on the product page.
+    - For Backend Search Terms, summarize themes from `amazon_listings_raw.attributes.generic_keyword`. If that source has no rows, mark the area not assessed. Do not invent terms from the title or bullets.
 - Base the area ratings only on listing relevance and intent coverage for COSMO / Rufus-style ranking. Do not score PPC budget, price, profitability, or ratings as listing quality areas. Use those metrics only to explain business impact and prioritization.
 - Calculate the overall rating as a weighted average of assessed area ratings, rounded to the nearest 0.5:
     - Title: 25%
