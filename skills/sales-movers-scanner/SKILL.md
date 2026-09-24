@@ -44,7 +44,9 @@ recent window to the prior equal window, then for each big mover decompose:
    (a 5% drop on a hero SKU beats a 90% drop on a trickle SKU). Look at gainers AND
    decliners.
 2. **Decompose the driver** for each mover:
-   - **Traffic** - `session` (or `page_views`) down/up -> visibility/rank/ads change,
+   - **Traffic** - the column is `session` (singular), or `page_views`. Do not request
+     `sessions` or `total_sessions` (`total_sessions` is on the profit tables, not here).
+     Down/up means a visibility, rank, ads, suppression, or seasonality change.
      a suppression, or seasonality. Sales followed the traffic.
    - **Conversion** - `units_session_percentage` (unit session rate) down/up while
      traffic held -> listing/price/reviews/offer problem or win.
@@ -82,7 +84,8 @@ reads as a riser). Guard both:
 - MCP base: `https://mcp.datadoe.com/mcp/v1`
 - Data source (resolve by table name with `exports_sources_get`):
   - `amazon_sales_and_traffic_with_cogs` - per child ASIN per day: `total_sales`,
-    `total_units`, `total_orders`, `session`, `page_views`, `units_session_percentage`
+    `total_units`, `total_orders`, `session` (not `sessions` or `total_sessions`),
+    `page_views`, `units_session_percentage`
     (conversion), `buybox_percentage`, `product_name`. This one table carries both the
     outcome (sales) and the funnel (traffic, conversion, buy-box) to decompose it.
 - Windows: compare a recent window to the prior equal window (e.g. last 7 days vs the 7

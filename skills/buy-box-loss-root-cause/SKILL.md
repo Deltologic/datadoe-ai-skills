@@ -60,9 +60,13 @@ Report the first gate that fails, biggest-revenue SKU first.
    Keep rows with `total_units > 0`. This finds ASINs with traffic/sales but low buy-box %.
 4. `exports_create` on `amazon_fba_inventory_health`, latest snapshot: `sku`, `child_asin`, `your_price`,
    `featuredoffer_price`, `lowest_price_new_plus_shipping`, `available`.
-5. Join the two on `child_asin`. For each low-bb ASIN (bb < ~90 with meaningful sales),
-   diagnose: price gap = `your_price - featuredoffer_price` (>0 -> priced out);
-   `available = 0` -> stock; else -> fulfilment/health check.
+5. Join inventory onto the ASIN. `amazon_fba_inventory_health` can have several SKUs
+   for one `child_asin`. Do not collapse those rows or average `your_price`.
+   - Price: for each SKU with a non-null `your_price`, gap = `your_price - featuredoffer_price`.
+     Report the SKU that is actually in stock (`available` > 0). If several are in stock,
+     show each SKU's gap. A gap above 0 means priced out.
+   - Stock: only when every SKU for that ASIN has `available` = 0.
+   - Otherwise: fulfilment/health check.
 6. Rank by sales at risk (sales x (1 - bb/100)) and render.
 
 ## Output format

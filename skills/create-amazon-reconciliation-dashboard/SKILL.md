@@ -118,7 +118,7 @@ The most prominent and functional section. Every order across all 6 months in a 
 - **Synced with month selector**: when a month is selected in the header, the Order Explorer auto-filters to that month's orders. "All 6 Months" shows everything.
 - **Global text search**: live filter as the user types — searches Order ID and all text fields. Debounce ~200ms.
 - **Column filters** (dropdowns above the table):
-  - Status: All / Shipped / Cancelled / Pending.
+  - Status: All / Shipped / Canceled / Pending. Match `amazon_order_status` exactly (`Canceled`, not `Cancelled`).
   - Channel: All / Amazon / Merchant.
   - Recon Status: All / Settled / Refunded / Pending / Cancelled.
   - B2B: All / Yes / No.
@@ -369,7 +369,7 @@ Common reasons for gaps:
 - **Date shifting**: orders placed on Jan 31 may appear in the Feb settlement; Feb 28 orders may settle in March.
 - **MCF / Multi-Channel Fulfillment orders**: appear in settlements with fulfilment fees but with £0 `item_price` in the orders report.
 - **B2B deferred orders**: business orders may be deferred for 30 days before settlement.
-- **Cancelled orders**: appear in orders (status = Cancelled) but not in settlements.
+- **Canceled orders**: appear in orders (`amazon_order_status` = `Canceled`) but not in settlements.
 - **Refunds**: processed as separate `REFUND` settlement entries, not linked back to the original order date.
 
 The dashboard should help the user **build confidence** that the data is correct.
