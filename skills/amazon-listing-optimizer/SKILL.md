@@ -138,8 +138,10 @@ Mine 3-4 star reviews for the real audience language and objections.
     `search_query_total_purchase_count`, `child_asin_organic_search_rank`,
     `child_asin_median_click_price_value`/`_currency`.
   - `amazon_products_by_child_asin` - current `product_name` (title),
-    `product_bullet_point_1..5`, `product_description`, `product_brand`, category,
-    BSR, `product_image_url`, `marketplace_country_code`.
+    `product_bullet_point_1` through `product_bullet_point_5`, `product_description`,
+    `product_brand`, `product_root_category_name`, `product_node_category_name`,
+    `product_root_best_selling_rank`, `product_node_best_selling_rank`,
+    `product_image_url`, `marketplace_country_code`.
   - `amazon_listings_raw` - listing attributes, backend keywords, listing issues /
     suppressions, and **which attribute fields are empty** (the "death of null" gap
     COSMO penalises).
@@ -210,7 +212,7 @@ Mine 3-4 star reviews for the real audience language and objections.
 - **Bullets:** 5, benefit first then the proof feature and the use context; one COSMO
   dimension / customer question each; distinct keywords across the five; keep required
   regulatory/safety text; no keyword-stuffing.
-- **Backend search terms (`generic_keyword`):** fill the marketplace byte cap; NO words
+- **Backend search terms:** read them from `amazon_listings_raw.attributes` (Amazon attribute `generic_keyword`). They are not a column on `amazon_products_by_child_asin`. Fill the marketplace byte cap; NO words
   already in the title/bullets; no brand or competitor names; synonyms, misspellings,
   other-language terms; space-separated, no commas needed.
 - **Attributes:** fill every relevant structured field (audience, use, occasion,
@@ -261,12 +263,12 @@ EMPTY ATTRIBUTES to fill: {field, field, ...}
 CHECK MANUALLY (data can't see): main image / images / A+ / rating / price-coupon
 
 --- UPLOAD-READY (paste into listing / flat file) ---
-item_name (title, {chars}/75):
+item_name (Amazon listing attribute for catalog `product_name`, {chars}/75):
   {new title, <=75 chars, compliant}
 bullet_point1..5:
   1) {benefit + proof + context, one COSMO dimension}
   ...5
-generic_keyword (backend, {bytes}/{cap}):
+generic_keyword (inside `amazon_listings_raw.attributes`, {bytes}/{cap}):
   {relevant terms not in title/bullets}
 attributes_to_fill:
   {audience=..., intended_use=..., occasion=..., material=...}
