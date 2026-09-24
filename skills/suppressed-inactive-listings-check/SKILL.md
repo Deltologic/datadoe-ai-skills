@@ -71,12 +71,14 @@ long-tail ones.
     `fulfillment_availability`, and `attributes`. NOTE: rows are large JSON - pull
     only the columns you need and parse them; download to a file rather than dumping
     everything into context.
-  - `amazon_products_by_child_asin` - `product_name`, category, `product_image_url`
-    for a readable report and to confirm a missing main image.
-  - `amazon_fba_inventory_by_asin_by_country` (or your inventory-health source) -
-    units on hand, to flag stranded inventory and size the storage exposure.
-  - `amazon_profit_by_sku_and_date` (or `amazon_sales_and_traffic_with_cogs`) -
-    recent sales per SKU, to rank issues by revenue at risk.
+  - `amazon_products_by_child_asin` - `product_name`, `product_root_category_name`,
+    `product_node_category_name`, `product_image_url` for a readable report and to
+    confirm a missing main image.
+  - `amazon_fba_inventory_by_asin_by_country` - `quantity_for_local_fulfillment` is
+    units on hand for that country. Or `amazon_fba_inventory_health`.`available`.
+  - `amazon_profit_by_sku_and_date` (`total_sales`, `sku`, `child_asin`) or
+    `amazon_sales_and_traffic_with_cogs` (`total_sales`, `child_asin`) - recent sales,
+    to rank issues by revenue at risk.
 - Currency/marketplace: read `marketplace_country_code`; a multi-marketplace account
   has one listing row per marketplace, so check and report each marketplace
   separately (a SKU can be live in one and suppressed in another). Keep money in
