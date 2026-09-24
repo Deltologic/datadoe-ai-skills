@@ -22,8 +22,8 @@ Analyze the search performance of that ASIN and review its visibility in Amazon 
     - If raw listing data is unavailable, continue with the Amazon page and search result data, clearly mark which fields could not be assessed, and do not infer hidden fields.
     - If A+ / enhanced content, backend terms, images, or any other listing area is unavailable in the data, state that limitation in the report and base recommendations only on visible or fetched evidence.
 - For context, fetch from DataDoe:
-    - Profitability of that ASIN from the last 64 days aggregated by week. Use the `amazon_profit_by_sku_and_date` source.
-    - Latest available data about this ASIN from the `amazon_child_product_search_performance_per_month` source.
+    - Profitability of that ASIN from the last 64 days aggregated by week. Use `amazon_profit_by_sku_and_date`: `date`, `child_asin`, `sku`, `product_name`, `currency`, `total_sales`, `profit`, `total_units_sold`, `ad_spend`.
+    - Latest available row for this ASIN from `amazon_child_product_search_performance_per_month`: `date`, `child_asin`, `search_impression_count`, `search_click_count`, `search_click_rate`, `search_cart_add_count`, `search_purchase_count`, `search_conversion_rate`.
 - Use the built-in browser to gather insights on how users see that ASIN page and to get details about its competitors from search results.
 
 # Output
