@@ -77,16 +77,20 @@ Per query, compute:
 - **Cart rate** = `child_asin_add_to_cart_count` / `child_asin_click_count`.
 - **Your CVR** = `child_asin_purchase_count` / `child_asin_click_count`, and the
   **market CVR** = `search_query_total_purchase_count` / `search_query_total_click_count`.
-- **Best organic rank** = `min(child_asin_organic_search_rank)`.
+- **Search Query Score** = `child_asin_search_query_score`, kept per ASIN, marketplace
+  and period as context. Amazon ranks queries relative to other queries for the same
+  ASIN based on overall query performance; 1 is highest. This is not the ASIN's organic
+  search position. Do not take a minimum or aggregate scores across periods or ASINs.
 
 Then classify each high-value query:
 
 1. **Exposure problem** - you win on CTR/CVR (at or above market) but impression share
-   is low. The listing is good; it just isn't seen. **Fix: rank + ads**, not copy. The
-   most-missed, highest-upside case.
-2. **Discoverability / indexing** - low impression share AND weak rank on a relevant,
-   high-volume query -> the term isn't indexed. **Fix: put it in a bullet / backend /
-   attribute** (not necessarily the 75-char title), then rank.
+   is low. **Investigate: ads, offer, stock and relevant keyword coverage** before
+   rewriting copy; stronger exposure may be the highest-upside opportunity.
+2. **Keyword coverage gap** - a relevant, high-volume query has low impression share
+   and its terms are absent from the listing. **Fix: consider a bullet / backend /
+   attribute** (not necessarily the 75-char title). Low share or a Search Query Score
+   does not prove that the term is not indexed; verify indexing separately.
 3. **Click-rate (below-market CTR)** - impressions but CTR below the market CTR for
    that query -> main image / title / price / badge. (If CTR is low in absolute terms
    but at market, there is nothing to fix - don't chase it.)
@@ -135,7 +139,7 @@ Mine 3-4 star reviews for the real audience language and objections.
     `child_asin_impression_count` + `search_query_total_impression_count`,
     `child_asin_click_count` + `search_query_total_click_count`,
     `child_asin_add_to_cart_count`, `child_asin_purchase_count` +
-    `search_query_total_purchase_count`, `child_asin_organic_search_rank`,
+    `search_query_total_purchase_count`, `child_asin_search_query_score`,
     `child_asin_median_click_price_value`/`_currency`.
   - `amazon_products_by_child_asin` - current `product_name` (title),
     `product_bullet_point_1` through `product_bullet_point_5`, `product_description`,
@@ -146,12 +150,16 @@ Mine 3-4 star reviews for the real audience language and objections.
     suppressions, and **which attribute fields are empty** (the "death of null" gap
     COSMO penalises).
   - `amazon_ads_search_terms_by_campaign_by_date` - converting ad search terms (keyword
-    harvest the organic SQP set may miss).
+    harvest the SQP set may miss).
   - `amazon_fba_inventory_health` (optional) - `your_price`, `featuredoffer_price`,
     `lowest_price_new_plus_shipping`, `available` for a price/stock read (a CVR leak is
     often price or an out-of-stock, not copy).
   - `amazon_brand_analytics_search_terms_weekly` (Brand Registry only, optional) - top
     terms with #1-3 click/conversion share. If absent, **skip and say so** - never block.
+- Use `child_asin_search_query_score`. `child_asin_organic_search_rank` is a deprecated
+  compatibility name for the same data and should not be used in new exports.
+- The SQP table name stays unchanged for compatibility; the source does not provide
+  organic search position or separate organic and sponsored visibility.
 - Inputs: the target ASIN/SKU (+ marketplace if multi).
 
 ## Step-by-step workflow (MCP-native)
@@ -167,12 +175,13 @@ Mine 3-4 star reviews for the real audience language and objections.
    over a full recent window (>= 8 weeks), grouped by `search_query`, pulling BOTH the
    `child_asin_*` and the `search_query_total_*` columns so you can benchmark against
    the market. Compute impression share, your-vs-market CTR, cart rate, your-vs-market
-   CVR, best rank per query.
+   CVR. Sum funnel counts over the window before dividing; if showing Search Query
+   Score, pull `date` separately and show per-period values without aggregation.
 5. **Theme check (first):** cluster into themes, find the best-converting theme with
    real volume, check whether its words are in the title.
-6. **Classify each high-value query** as exposure / discoverability / CTR / CVR /
-   relevance using the market benchmarks. Split "you win but aren't seen" (rank+ads)
-   from "you're seen but lose" (copy).
+6. **Classify each high-value query** as exposure / keyword coverage / CTR / CVR /
+   relevance using the market benchmarks. Split "you win but aren't seen"
+   (investigate ads/offer/coverage) from "you're seen but lose" (copy).
 7. **Intent-coverage + Rufus audit:** score the listing on the COSMO dimensions and the
    Rufus questions above; note which are missing.
 8. **Harvest + competitive gap:** pull converting ad terms; if Brand Analytics is
@@ -221,6 +230,10 @@ Mine 3-4 star reviews for the real audience language and objections.
 
 ## What the data can't see - flag these to check manually
 
+- **Organic search position and indexing** - SQP cannot establish either. Search Query
+  Score is relative query performance for one ASIN, and SQP shares do not isolate
+  organic visibility. Verify positions or indexing separately if needed.
+
 - **Main image + image count** - a below-market CTR is very often the main image; aim
   for a clean main image plus 6-7+ images with use-case/infographic content (COSMO now
   reads use-case imagery, not decorative icons).
@@ -245,11 +258,11 @@ THEME CHECK (what actually converts)
   ...
 
 FUNNEL DIAGNOSIS (top queries, vs market)
-  query   vol   impr-share   yourCTR/mkt   cart%   yourCVR/mkt   rank   verdict
+  query   vol   impr-share   yourCTR/mkt   cart%   yourCVR/mkt   query score (context)   verdict
   ...
 
 EXPOSURE UPSIDE (you win but aren't seen)
-  {kw}: impr-share {s}%, CTR {x}x market, CVR at/above market -> push rank/ads first
+  {kw}: impr-share {s}%, CTR {x}x market, CVR at/above market -> investigate ads / offer / stock / keyword coverage
 
 INTENT COVERAGE (COSMO): WHO {y/n} · WHAT-does {y/n} · WHERE/WHEN {y/n} · WHAT-is {y/n} · PAIRS/COMPARE {y/n}
 RUFUS-READY: for-whom {y/n} · problem {y/n} · made-of {y/n} · compare {y/n} · objections {y/n}
@@ -258,7 +271,7 @@ COMPETITIVE GAP (only if Brand Analytics available)
   {term}: your share {x}% (top competitor {y}%)   [or: "Brand Analytics not enabled - skipped."]
 
 KEYWORD COVERAGE: {covered}/{topN} high-value terms in the listing
-  Missing (relevant): {kw (vol, rank)} -> {title/bullet/backend}
+  Missing (relevant): {kw (vol, impression share)} -> {title/bullet/backend}
 EMPTY ATTRIBUTES to fill: {field, field, ...}
 CHECK MANUALLY (data can't see): main image / images / A+ / rating / price-coupon
 
@@ -276,7 +289,7 @@ attributes_to_fill:
 FIX FIRST (by impact, measurable)
   1) {title: add best-converting theme / bring under 75 chars (headline)}
   2) {below-market CTR on "Y" -> new main image + title hook}
-  3) {exposure: you win "Z" but see {s}% -> push rank/ads}
+  3) {exposure: you win "Z" but see {s}% -> investigate ads / offer / stock / keyword coverage}
   Measure: ship #1 now, allow days-to-weeks for re-index, re-run and compare.
 ```
 
@@ -286,8 +299,8 @@ An odor spray out-clicks the market ~3x on the "against odor" theme and converts
 but "odor" is absent from the title -> **headline fix**: since the title now holds only
 75 chars, spend them on brand + "against odor" + the product type, and push the rest of
 the keywords into bullets and backend. On its best terms it shows for only ~4% of
-impressions while beating market CTR and CVR -> **exposure upside**: push rank/ads,
-don't touch copy. A "disinfectant" theme clicks at market rate but converts below
+impressions while beating market CTR and CVR -> **exposure upside**: investigate ads,
+offer, stock and keyword coverage before rewriting copy. A "disinfectant" theme clicks at market rate but converts below
 market -> a **page/trust** fix (and a defensible claim only if the product qualifies).
 The intent audit shows the listing never says WHERE it's used or WHAT it pairs with ->
 add those to bullets for COSMO. Output: a compliant title, question-led bullets, a full
@@ -299,7 +312,7 @@ days-to-weeks" plan - a diagnosis and the rewrite, not a keyword list.
 - Is the rewritten title <= 75 characters, brand-first, one keyword each, no
   promo/subjective words, no banned symbols? Did I flag the current title if it's over?
 - Did I benchmark each funnel stage against the market (not absolute numbers) and
-  separate exposure (rank/ads) from copy (image/page) problems?
+  separate exposure (ads/offer/coverage) from copy (image/page) problems?
 - Did I run the theme check first and put the best-converting theme in the title?
 - Did I audit COSMO intent coverage (who/what-does/where-when/what-is/pairs) and the
   Rufus questions, and route missing keywords to bullets/backend/attributes?
@@ -315,6 +328,8 @@ days-to-weeks" plan - a diagnosis and the rewrite, not a keyword list.
 - Writing a long, keyword-stuffed title - it now breaks the 75-char policy and COSMO
   flags it; Amazon may auto-rewrite it against you.
 - Reading CTR/CVR as absolute numbers instead of against the market for that query.
+- Treating Search Query Score as organic position or proof that a term is not indexed.
+- Aggregating query scores into a "best organic rank" across periods or ASINs.
 - Treating an exposure problem (you win but aren't seen) as a copy problem.
 - Repeating a keyword across title/bullets/backend instead of covering a new intent
   dimension (breadth beats repetition).

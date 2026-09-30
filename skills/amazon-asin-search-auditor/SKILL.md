@@ -32,7 +32,8 @@ metadata:
     - Fetch the following top search terms data:
         - Source: `amazon_child_product_organic_search_ranks_per_week`.
         - Total top 5 search terms by `child_asin_purchase_count` from the last 60 days.
-        - Add all other available metrics to the data.
+        - Add all other available metrics to the data, using `child_asin_search_query_score` for Amazon Search Query Score.
+        - `child_asin_organic_search_rank` is a deprecated compatibility name and should not be used; neither name measures organic search position. Keep scores per ASIN and period, never use them as browser-observed ranks.
         - Download the report to file using `exports_raw_url_get` method.
         - It is OK if there are fewer than 60 days of data.
     - Write `coreSearchSummaries.json` with normalized fields matching `references/dashboard.md`.
