@@ -95,11 +95,11 @@ do not auto-negate.
      "marketplaces": ["<marketplace code, e.g. DE>"]
    }
    ```
-8. `actions_start` with **`dryRun: true`**. This validates the whole batch
+8. `actions_write_start` with **`dryRun: true`**. This validates the whole batch
    without touching Amazon and works even if the Action type is disabled - this
    is the safe demo path.
 9. Show the validated result. Only if the user explicitly approves, call
-   `actions_start` again with `dryRun: false`, then poll `actions_get` until it
+   `actions_write_start` again with `dryRun: false`, then poll `actions_get` until it
    completes and report per-term acceptance.
 
 ## Output format

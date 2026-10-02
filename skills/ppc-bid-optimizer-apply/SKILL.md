@@ -60,14 +60,14 @@ Never move a bid more than one step per run - PPC needs time to settle.
    `[ad_keyword, ad_match_type, ad_campaign_id, ad_group_id]`, sum
    `ad_spend/ad_sales/ad_clicks/ad_orders`, filter `ad_campaign_type =
    SPONSORED_PRODUCTS`. Compute ACoS per keyword.
-3. **Current bids:** `actions_start` `AMAZON_ADS_TARGETS_FIND` (targetQuery,
+3. **Current bids:** `actions_readonly_start` `AMAZON_ADS_TARGETS_FIND` (targetQuery,
    adProductFilter SPONSORED_PRODUCTS, targetTypeFilter KEYWORD, stateFilter
    ENABLED), poll `actions_get` -> map `targetId` + current `bid` by keyword.
 4. Compute new bid per the framework (clamp to min/max + max step). Build the change
    list, biggest ACoS offenders first.
-5. **dryRun:** `actions_start` `AMAZON_ADS_TARGETS_UPDATE` with `dryRun: true`. Show
+5. **dryRun:** `actions_write_start` `AMAZON_ADS_TARGETS_UPDATE` with `dryRun: true`. Show
    the validated result (status VALIDATED) and the full before/after bid table.
-6. On explicit approval only: `actions_start` again with `dryRun: false`, poll
+6. On explicit approval only: `actions_write_start` again with `dryRun: false`, poll
    `actions_get`, report per-target acceptance. Otherwise stop - nothing changed.
 
 ## Output format
