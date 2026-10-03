@@ -41,11 +41,52 @@ if (!fs.existsSync(jsonDir) || !fs.statSync(jsonDir).isDirectory()) {
 
 const csvContent = fs.readFileSync(csvPath, "utf8");
 
+// DataDoe always prepends utility columns (seller_id, seller_name,
+// amazon_selling_partner_id, ... , marketplace_name) before child_asin, so the ASIN is
+// never the only/first column. Parse by HEADER: find the child_asin column index and
+// extract just that column. Quote-aware so embedded commas/quoting can't shift columns.
+function parseCsvLine(line) {
+  const fields = [];
+  let field = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"' && line[i + 1] === '"') { field += '"'; i++; }
+      else if (ch === '"') { inQuotes = false; }
+      else { field += ch; }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ",") {
+      fields.push(field);
+      field = "";
+    } else {
+      field += ch;
+    }
+  }
+  fields.push(field);
+  return fields.map(f => f.trim());
+}
+
+const rows = csvContent.split(/\r?\n/).filter(line => line.trim() !== "");
+
+if (rows.length === 0) {
+  console.log("CSV file is empty.");
+  process.exit(1);
+}
+
+const header = parseCsvLine(rows[0]);
+const asinIndex = header.indexOf("child_asin");
+
+if (asinIndex === -1) {
+  console.log('CSV has no "child_asin" column. Columns found: ' + header.join(", "));
+  process.exit(1);
+}
+
 const asinSet = new Set(
-  csvContent
-    .split(/\r?\n/)
-    .slice(1) // skip header
-    .map(line => line.trim())
+  rows
+    .slice(1)
+    .map(line => parseCsvLine(line)[asinIndex])
     .filter(Boolean)
 );
 

@@ -10,6 +10,7 @@ description: >-
 metadata:
   author: DataDoe
   check-more-skills-at: https://app.datadoe.com/hub/ai-agents-and-skills
+  title: PPC Wasted Spend Watchdog
   access: read
   category: PPC & Ads
   interface: mcp
@@ -20,7 +21,7 @@ metadata:
 
 Finds the exact search terms and keywords burning your ad budget - spend with no
 (or too few) orders, and high-ACoS terms dragging profit - and quantifies the
-euros you'd save. Live from DataDoe Search Term Performance. The read half of the
+money you'd save. Live from DataDoe Search Term Performance. The read half of the
 negative-keyword workflow.
 
 ## When to use this
@@ -34,11 +35,16 @@ negative-keyword workflow.
 ## The framework. Two waste buckets
 
 1. **Dead spend** - term has clicks + spend but `orders = 0` over the window. Pure
-   waste. Usually **long-tail**: many small terms (individually a few euros each) that
-   add up - so you must scan wide, not just the top spenders.
-2. **Bleeders** - term converts but ACoS is above your break-even (spend/sales far
-   above target). Losing money on every sale.
-Sort each by spend so the biggest euros come first. (For account-level TACoS trend,
+   waste. Usually **long-tail**: many small terms (individually small amounts each) that
+   add up - so you must scan wide (paginate the full set), not just the top spenders.
+   **Exclude ASIN-target terms first** - many top "dead" terms are ASIN strings (e.g.
+   `b0ch3jb9h1`, a 10-char `B0...` alphanumeric) = deliberate competitor-ASIN targeting,
+   not junk queries; flag them separately, don't recommend negating them.
+2. **Bleeders** - term converts but ACoS is above your break-even. Split them:
+   - **Barely over** (e.g. ~32-33% ACoS vs a 30% break-even) that convert in volume ->
+     **bid trim**, not negation - they're close to profitable.
+   - **Hard bleeders** (e.g. 100%+ ACoS) -> negate (or exact-match at a low bid).
+Sort each by spend so the biggest amounts come first. (For account-level TACoS trend,
 use the Weekly Business Review skill - this one is term-level.)
 
 Do not recommend a base-bid cut from the blended search-term ACoS alone. A campaign
@@ -70,28 +76,43 @@ modifier you checked in the recommendation.
 
 - MCP base: `https://mcp.datadoe.com/mcp/v1`
 - Data sources:
-  - `Search Term Performance (Ads)` (`amazon_ads_search_terms_by_campaign_by_date`) - the customer search term that
-    triggered the ad. Primary source.
+  - `Search Term Performance (Ads)` (`amazon_ads_search_terms_by_campaign_by_date`) - the customer search term that triggered the ad. Primary source:
+    `ad_search_term`, `ad_spend`, `ad_clicks`, `ad_orders`, `ad_sales`, `ad_campaign_type`,
+    plus `ad_campaign_id` / `ad_group_id` (needed so the apply skills can target) and
+    `ad_keyword_bid` (the bid on the keyword that matched - this table does carry it).
   - `Keyword Targeting Performance` (`amazon_ads_targeting_by_campaign_by_date`) - your bid keywords, for the
-    keyword-level view + current bids.
+    keyword-level view. It carries **no bid column** - current bids come from
+    `AMAZON_ADS_TARGETS_FIND` (see the bid-optimizer skill).
+- **`having` is supported** (post-aggregation, on `groupBy` fields and aggregation aliases;
+  `filters` stay pre-aggregation). Use it to pull the dead bucket in one call:
+  `having clicks_sum >= 10 AND orders_sum = 0`. Bleeders need ACoS, which is a ratio -
+  compute that client-side from the summed columns.
+- **Row caps and pagination:** 1,000 rows per JSON export, 5,000 per CSV. A spend-sorted
+  pull keeps the big terms; the `having` export keeps the dead ones (in testing all 35 dead
+  terms were on page 1 by spend anyway). Paginate with `skip` in `limit` steps only when a
+  page returns exactly `limit` rows and you need the remainder.
 - Currency/marketplace: read `marketplace_country_code`; localise (e.g. a German marketplace = EUR).
-- Set the break-even ACoS from the user (default 30% if unknown).
+- Set the break-even ACoS from the user (default 30% if unknown) - margins differ by
+  product, so make it adjustable (optionally per product group).
 
 ## Step-by-step workflow (MCP-native)
 
 1. `sellers_and_vendors_list` -> pick the seller.
 2. `exports_sources_get` (query "search term") -> confirm `amazon_ads_search_terms_by_campaign_by_date` is `enabled`.
 3. `exports_create` for `amazon_ads_search_terms_by_campaign_by_date`, last 30-60 days:
-   - `groupBy`: `["ad_search_term"]` (add `ad_campaign_name`, `ad_group_id` when you
-     need the target for negatives)
+   - `groupBy`: `["ad_search_term", "ad_campaign_id", "ad_group_id"]` (keep the
+     campaign/ad-group ids - the apply skills need them to target; add `ad_campaign_name`
+     for readability)
    - `aggregations` sum: `ad_spend`, `ad_clicks`, `ad_orders`, `ad_sales`
    - filter `ad_campaign_type = SPONSORED_PRODUCTS`.
-   - **Pull wide** to catch dead spend: bleeders sit at the top by spend, but dead
-     terms hide in the tail - so either `orderByColumn` the orders alias `ASC` (0-order
-     terms first) or pull a large limit (up to 3500 / paginate with `skip`) and bucket
-     client-side. Don't judge from top-by-spend alone.
-4. Poll, download. Compute per term: ACoS = spend / sales (guard sales=0),
-   orders. Bucket: dead (orders=0, clicks >= ~10), bleeder (ACoS > break-even),
+   - Two exports: (a) sorted by the spend alias `DESC`, `limit` 5,000 CSV, for the top
+     spenders and bleeders; (b) the same `groupBy` with `having clicks_sum >= 10 AND
+     orders_sum = 0` for the complete dead bucket. If (a) returns exactly `limit` rows and
+     you need the tail, page with `skip`. Ads exports can queue slowly, so budget for polling.
+4. Poll, download, and bucket. The `having` export is the dead bucket; for the rest compute per term:
+   ACoS = spend / sales (guard sales=0), orders. First set aside ASIN-target terms
+   (`b0...` strings) as competitor targeting, not waste. Then bucket: dead (orders=0,
+   clicks >= ~10), bleeder (ACoS > break-even; split barely-over -> trim vs hard -> negate),
    ok. Sum wasted = dead spend + overspend on bleeders.
 5. (Optional) pull `amazon_ads_targeting_by_campaign_by_date` for the keyword-level
    view (which bid keyword each wasteful term maps to). Current bids for a cut come
@@ -99,32 +120,33 @@ modifier you checked in the recommendation.
 6. For each campaign you would cut or negate, pull placement performance, the raw
    campaign bid adjustments, and `amazon_ads_audiences_by_date` as in the modifier
    checks above. Name the placement or audience that should be left alone.
-7. Render, biggest euros first. Hand the dead terms to `ppc-negative-keyword-applier`
+7. Render, biggest spend first. Hand the dead terms to `ppc-negative-keyword-applier`
    and the bleeders to `ppc-bid-optimizer-apply`, with the modifier note attached.
 
 ## Output format
 
 ```
-Wasted Ad Spend - {marketplace} - last {N} days
+Wasted Ad Spend - {marketplace} - last {N} days   (full set paginated)
 Total wasted: {cur}{wasted}  ({dead} dead + {bleed} over break-even)  ACoS target {t}%
 
 Dead spend (no orders)
-term                      spend    clicks
-{term}                    {cur}..  {n}
+term                      spend    clicks   campaign / ad group
+{term}                    {cur}..  {n}      {campaign} / {group}
 
 Bleeders (ACoS > {t}%)
-term                      spend    sales    ACoS
-{term}                    {cur}..  {cur}..  {a}%
+term                      spend    sales    ACoS   action
+{term}                    {cur}..  {cur}..  {a}%   trim bid / negate (>100%)
 
-Next: negate the dead terms · cut bids on the bleeders.
+Excluded (ASIN-target terms, not junk): {count}
+Next: dead terms -> ppc-negative-keyword-applier · bleeders -> ppc-bid-optimizer-apply.
 ```
 
 ## Worked example (illustrative)
 
-A search term might show ~€114 spend, ~128 clicks, 8 orders, ~€63 sales -> ACoS
+A search term might show ~{cur}114 spend, ~128 clicks, 8 orders, ~{cur}63 sales -> ACoS
 ~181%. A textbook bleeder: it converts, but every sale loses money. Action: cut the
 bid hard or move it to exact with a low bid; if it stays >100% ACoS, negate it. By
-contrast a term at ~€537 spend / ~€2,900 sales (~18% ACoS) is a keeper. Same report,
+contrast a term at ~{cur}537 spend / ~{cur}2,900 sales (~18% ACoS) is a keeper. Same report,
 opposite decisions - the skill separates the two.
 
 ## Quality self-check
@@ -132,9 +154,14 @@ opposite decisions - the skill separates the two.
 - Did I separate dead (0 orders) from bleeders (convert but unprofitable)?
 - Did I use enough clicks before calling a term "dead" (>= ~10)?
 - Is ACoS computed per term from summed spend/sales, not a summed ratio?
-- Did I rank by euros wasted, not count?
+- Did I rank by spend wasted (in the account currency), not count?
 - Before a bid cut, did I check placement ACoS, placement and audience modifiers,
-  and `amazon_ads_audiences_by_date`?
+  and `amazon_ads_audiences_by_date` (it is empty for some marketplaces - 0 rows for UK
+  while DE had rows - so skip that check and say so when the export returns nothing)?
+- Did I pull the dead bucket with `having` (or paginate) so it is complete, not truncated?
+- Did I set aside ASIN-target (`b0...`) terms as competitor targeting, not waste?
+- Did I split bleeders into bid-trim (barely over) vs negate (hard, 100%+)?
+- Did I compute ACoS and the bleeder split client-side (ratios are never summed)?
 
 ## Common mistakes
 
@@ -143,9 +170,17 @@ opposite decisions - the skill separates the two.
   it out, don't auto-cut).
 - Confusing search term (shopper query) with keyword (your bid).
 - Summing the ACoS column - recompute it.
+- Judging from a single truncated pull - caps are 1,000 rows JSON / 5,000 CSV; use the
+  `having` export for the dead bucket and `skip` pagination if a page fills to `limit`.
+- Treating a 0-row `amazon_ads_audiences_by_date` export as "no audience modifiers" - the
+  table is empty for some marketplaces; say the check was skipped.
+- Negating ASIN-target (`b0...`) terms - that's competitor targeting, not junk.
+- Negating a barely-over bleeder that converts in volume - trim its bid instead.
 
 ## Notes
 
-- Read-only (analysis). The write follow-ups are separate skills
-  (`ppc-negative-keyword-applier`, `ppc-bid-optimizer-apply`), each dryRun-gated.
-- A DataDoe skill, built on the DataDoe Search Term Performance source.
+- Read-only (analysis). The write follow-ups are separate skills: dead terms ->
+  `ppc-negative-keyword-applier`, bleeders -> `ppc-bid-optimizer-apply` (each dryRun-gated).
+  Pass `ad_campaign_id` / `ad_group_id` through - both apply skills need them to target.
+- A DataDoe skill, built on the DataDoe Search Term Performance source
+  (`amazon_ads_search_terms_by_campaign_by_date`).

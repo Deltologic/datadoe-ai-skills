@@ -1,9 +1,9 @@
-// extract-asins.js
-// Usage: node extract-asins.js ./json-input-dir
+// list-asins.js
+// Usage: node list-asins.js ./json-input-dir
 // Output: asins.json
 
-import { existsSync, statSync, readdirSync, readFileSync, writeFileSync } from "fs";
-import { join } from "path";
+const { existsSync, statSync, readdirSync, readFileSync, writeFileSync } = require("fs");
+const { join } = require("path");
 
 const inputDir = process.argv[2];
 const outputPath = "asins.json";
