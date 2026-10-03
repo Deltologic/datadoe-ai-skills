@@ -54,7 +54,7 @@ guardrails below.
   [premium] - per target/day: `action_target_id` (the Ads `targetId`, ready for the UPDATE
   payload), `ad_keyword_bid`, `estimated_break_even_acos` (compare actual ACoS against it
   instead of a flat target when available), `is_attribution_mature` (skip rows where it is
-  false instead of guessing a 7-day cut-off). Premium guard: check `exports_source_get` first - `enabled: false` (or `isPremium: true` without plan access) means the table is not in the plan: tell the user so and fall back to the source below. A 0-row export on its own means no data in the window, not a plan problem - say which it is; never render zeros.
+  false instead of guessing a 7-day cut-off). Premium note: a premium export costs 5 AI Tokens instead of 2 - nothing else differs, and the table is part of the always-on default dataset, so it is never disabled. A 0-row export means no data in the window or an initial load still in progress - say which, and fall back to the source below; never render zeros.
   Note: `estimated_break_even_acos` is null when the account has no COGS uploaded - then
   use the user's target ACoS.
 - Read (performance), fallback: `amazon_ads_search_terms_by_campaign_by_date` - per keyword/day: `ad_keyword_id`, `ad_keyword`, `ad_keyword_bid`
@@ -99,7 +99,7 @@ guardrails below.
 ## Step-by-step workflow (MCP-native)
 
 1. `sellers_and_vendors_list` -> pick the seller.
-2. **Performance:** prefer `amazon_ads_profit_by_target_and_date` when it is in the plan
+2. **Performance:** prefer `amazon_ads_profit_by_target_and_date` (premium export, 5 AI Tokens) when it has rows
    (filter `is_attribution_mature = true`, group by `action_target_id`, sum spend/sales/
    clicks/orders, `max(ad_keyword_bid)`). Otherwise `exports_create` on
    `amazon_ads_search_terms_by_campaign_by_date`, trailing 30-60d but **ending ~7 days

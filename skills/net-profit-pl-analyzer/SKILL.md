@@ -55,7 +55,7 @@ Work top-down, then find the leaks:
   the per-SKU ranking. Its `ad_spend` is Sponsored Products and Sponsored Display,
   same-SKU attribution only. **Do not sum this table's `profit` and call it account
   profit.** That sum will not equal `amazon_profit_by_date.profit`.
-- Both tables are premium. Premium guard: check `exports_source_get` first - `enabled: false` (or `isPremium: true` without plan access) means the table is not in the plan: tell the user so and stop. A 0-row export on its own means no data in the window, not a plan problem - say which it is; never render zeros.
+- Both tables are premium. Premium note: a premium export costs 5 AI Tokens instead of 2 - nothing else differs, and the table is part of the always-on default dataset, so it is never disabled. A 0-row export means no data in the window or an initial load still in progress - say which, and stop; never render zeros.
   Filter on `date` (marketplace-local profit date); the profit tables have no `order_date`
   column (`FIELD_NOT_FOUND`). Always group by at least `currency`: an empty `groupBy`
   returns one account-total row, which hides a multi-currency account.

@@ -24,7 +24,8 @@ Recommendations as the fallback, plus a velocity sanity-check against real sales
 the silent revenue loss of a hero SKU going to zero.
 
 <!-- TODO(Riegel, Q5): primary restock source still to be decided - inventory_health
-(premium, empty for non-premium orgs) vs restock_recommendations (free). Until answered,
+(premium; the empty table seen in July was most likely an initial-load state) vs
+restock_recommendations (free, optional, multi-country). Until answered,
 inventory_health is primary with an emptiness guard that falls back to
 restock_recommendations. -->
 
@@ -59,9 +60,8 @@ implausible reco is noise, not a signal).
   `available`, `inbound_quantity`, `days_of_supply`, `units_shipped_t30`,
   `units_shipped_t7`, `recommended_ship_in_quantity`, `recommended_ship_in_date`,
   `fba_inventory_level_health_status`. Not available in MX.
-  **Premium / emptiness guard:** Premium guard: check `exports_source_get` first - `enabled: false` (or `isPremium: true` without plan access) means the table is not in the plan: tell the user so and switch to the fallback below ("FBA Inventory Health is not available in your plan - using Amazon's restock recommendations instead"). A 0-row export on its own means no data in the window, not a plan problem - say which it is; never render zeros.
-  The table is also empty (0 rows) for non-premium orgs, so a 0-row result on this table
-  means: fall back. Never render an empty catalog as "nothing to restock".
+  **Emptiness guard:** Premium note: a premium export costs 5 AI Tokens instead of 2 - nothing else differs, and the table is part of the always-on default dataset, so it is never disabled. A 0-row export means no data in the window or an initial load still in progress - say which, and switch to the fallback below ("FBA Inventory Health returned no rows (initial load may still be running) - using Amazon's restock recommendations instead"); never render zeros.
+  Never render an empty catalog as "nothing to restock".
 - **Fallback source:** `FBA Restock Recommendations` (`amazon_fba_restock_recommendations`,
   free) - Amazon's own restock report. Per SKU/day: `sku`, `child_asin`, `product_name`,
   `available`, `inbound` (+ `working` / `shipped` / `receiving` breakdown),
@@ -78,7 +78,7 @@ implausible reco is noise, not a signal).
   inventory tables are **per SKU**: sibling SKUs of a live ASIN read 0 (1,694 "dead" SKUs
   on selling ASINs in testing), so judge velocity per `child_asin` (sum this table over
   the ASIN's SKUs) before calling a SKU dead or a recommendation "noise". If this table is
-  not in the plan, sum `units_shipped_t30` / `units_sold_last_30_days` across the ASIN's
+  unavailable (0 rows), sum `units_shipped_t30` / `units_sold_last_30_days` across the ASIN's
   SKUs and say the velocity is Amazon's own figure.
 - Lead time / target cover: ask the user (default 30 days).
 
@@ -112,7 +112,7 @@ implausible reco is noise, not a signal).
    today.
 5. **Velocity cross-check + fallbacks + sanity checks:**
    - **Cross-check velocity (important):** pull real 30-day units sold per SKU from
-     `amazon_profit_by_sku_and_date` (if in the plan) and use it as the authoritative
+     `amazon_profit_by_sku_and_date` (a premium export, 5 AI Tokens) and use it as the authoritative
      velocity. Treat a SKU as dead stock (skip it) only if BOTH sources show no sales; if
      the profit table shows sales, it is a live seller regardless of the inventory table.
    - If days-of-supply is null/empty (slow or near-zero SKUs often are): daily velocity =
@@ -174,7 +174,7 @@ That inbound-aware ranking is the point: at-zero alone isn't the trigger; at-zer
 ## Common mistakes
 
 - Reporting "nothing to restock" because `amazon_fba_inventory_health` came back empty -
-  that means the table is not in the plan; use the fallback source.
+  the initial load may not have finished; use the fallback source and say so.
 - Flagging at-zero SKUs that already have plenty inbound.
 - Recommending restock for dead stock (0 sales) - that's a removal decision, not restock.
 - Ignoring null days-of-supply instead of computing from velocity.

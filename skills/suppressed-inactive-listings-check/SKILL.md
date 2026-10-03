@@ -85,7 +85,7 @@ long-tail ones.
     `primary_action`, `your_price`. Use it as the stranded source of record; the
     `amazon_listings_with_cogs` gate above is the cross-check.
   - `amazon_sales_and_traffic_with_cogs` (or `amazon_profit_by_sku_and_date` [premium]) -
-    recent sales per SKU, to rank issues by revenue at risk. Premium guard: check `exports_source_get` first - `enabled: false` (or `isPremium: true` without plan access) means the table is not in the plan: tell the user so and use the sales-and-traffic table. A 0-row export on its own means no data in the window, not a plan problem - say which it is; never render zeros. (Item name and main image come from
+    recent sales per SKU, to rank issues by revenue at risk. Premium note: a premium export costs 5 AI Tokens instead of 2 - nothing else differs, and the table is part of the always-on default dataset, so it is never disabled. A 0-row export means no data in the window or an initial load still in progress - say which, and use the sales-and-traffic table; never render zeros. (Item name and main image come from
     `summaries`, so a separate catalog source is usually not needed.)
   - `amazon_products_by_child_asin` (optional fallback) - `product_name`, category,
     `product_image_url` if `summaries` name/image is missing or you want richer catalog data.
