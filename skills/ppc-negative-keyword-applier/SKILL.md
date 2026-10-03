@@ -10,6 +10,7 @@ description: >-
 metadata:
   author: DataDoe
   check-more-skills-at: https://app.datadoe.com/hub/ai-agents-and-skills
+  title: PPC Negative Keyword Applier
   access: write
   category: PPC & Ads
   interface: mcp

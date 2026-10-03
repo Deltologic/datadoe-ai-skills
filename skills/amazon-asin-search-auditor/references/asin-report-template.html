@@ -658,16 +658,18 @@
                   h(
                     "div",
                     { className: "metric", key: "rank" },
-                    h("div", { className: "k" }, "Organic rank"),
+                    h("div", { className: "k" }, "Search Query Score"),
                     h(
                       "div",
                       { className: "v" },
-                      sp.organicRank != null ? "#" + sp.organicRank : "n/a",
+                      (sp.searchQueryScore ?? sp.organicRank) != null
+                        ? String(sp.searchQueryScore ?? sp.organicRank)
+                        : "n/a",
                     ),
                     h(
                       "div",
                       { className: "s" },
-                      sp.organicRankNote || "Best rank from core data",
+                      sp.organicRankNote || "Amazon SQP score from core data - not a live SERP position",
                     ),
                   ),
                 ]),

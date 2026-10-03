@@ -123,8 +123,8 @@ Filter to items where `sellerCentralConnection` is not null.
 GET /api/v1/exports/sources?sellerOrVendorIds=<sellerId>
 ```
 
-Find the source named `Order Line Items` (type `SELLER_CENTRAL`).
-Hardcode fallback ID: `89b27535d27c2a94db5ae39af4717f542624ff4df7802fd633e16c78674a1778`
+Find the source named `Order Line Items` (type `SELLER_CENTRAL`) and use the `id` it returns — **always prefer the resolved id**.
+Never hardcode the source id: resolve it at runtime from `GET /api/v1/exports/sources` by matching `tableName == "amazon_order_items_with_cogs"` (the id format can differ between the REST and MCP surfaces).
 
 **3. Create export**
 
@@ -137,7 +137,7 @@ Request body:
 ```json
 {
   "sellerOrVendorIds": ["<sellerId>"],
-  "sourceId": "89b27535d27c2a94db5ae39af4717f542624ff4df7802fd633e16c78674a1778",
+  "sourceId": "<id of amazon_order_items_with_cogs from GET /exports/sources>",
   "columns": [
     "amazon_order_id",
     "date",
@@ -208,7 +208,7 @@ Example row returned in the flat array:
 
 ```json
 {
-  "seller_or_vendor_id": "54fa3cs2-b69f-4642-82c4-58fe731eed69",
+  "seller_or_vendor_id": "3f2a9c1e-5b7d-4e8a-9c21-7d4e5f6a8b90",
   "seller_or_vendor_name": "DataDoe UK",
   "marketplace_country_name": "United Kingdom",
   "amazon_order_id": "203-5492174-4518714",
@@ -232,7 +232,7 @@ For the full column reference, see: https://api.datadoe.com/api/v1/spec/data-sch
 
 The `/raw` endpoint returns a **flat array of line items**. Each element represents one SKU within one order. An order with N distinct SKUs produces N rows all sharing the same `amazon_order_id`.
 
-**CRITICAL — `columns: []` (empty array) does NOT return all columns.** It returns only seller-context columns (`seller_or_vendor_id`, `seller_or_vendor_name`, `marketplace_seller_id`, `marketplace_country_name`, etc.) and none of the Order Line Items fields (`amazon_order_id`, `sku`, `amazon_order_status`, etc.). Always specify the required columns explicitly.
+**CRITICAL — `columns: []` (empty array) does NOT return all columns.** It returns only seller-context metadata columns (seller id / name, marketplace, connection ids) and none of the Order Line Items fields (`amazon_order_id`, `sku`, `amazon_order_status`, etc.). Always specify the required columns explicitly. Every response also **prepends those utility columns** before your requested fields, so read values by **key/name, never by column position**.
 
 **Field roles:**
 
@@ -248,20 +248,21 @@ The `/raw` endpoint returns a **flat array of line items**. Each element represe
 | `product_name`        | Line item | Full product name                                                 |
 | `item_status`         | Line item | Can differ from `amazon_order_status`                                    |
 | `quantity`            | Line item | Units for this SKU only                                           |
-| `item_price_value`    | Line item | Unit price (multiply by `quantity` for line total)                |
+| `item_price_value`    | Line item | **Line-item total value — already includes quantity; use as-is, do NOT multiply by `quantity`** |
 | `item_price_currency` | Line item | Consistent across all rows for the same order                     |
 
 **How to build the parent (order) row from the flat array:**
 
 ```typescript
 // Group by amazon_order_id. Sort parent rows by date (purchase date).
+// item_price_value is already the line TOTAL - sum it as-is, never multiply by quantity.
 const ordersMap = new Map<string, OrderRow>();
 
 for (const item of lineItems) {
   const existing = ordersMap.get(item.amazon_order_id);
   if (existing) {
     existing.lineItems.push(item);
-    existing.totalPrice += item.item_price_value * item.quantity;
+    existing.totalPrice += item.item_price_value; // line total, NOT × quantity
     existing.itemCount += item.quantity;
   } else {
     ordersMap.set(item.amazon_order_id, {
@@ -270,7 +271,7 @@ for (const item of lineItems) {
       fulfillment_channel: item.fulfillment_channel, // order-level, consistent
       date: item.date, // purchase date in the marketplace timezone
       currency: item.item_price_currency, // consistent per order
-      totalPrice: item.item_price_value * item.quantity,
+      totalPrice: item.item_price_value, // line total, NOT × quantity
       itemCount: item.quantity,
       lineItems: [item],
     });
@@ -290,7 +291,7 @@ const orders = Array.from(ordersMap.values());
 | Status     | `amazon_order_status` (first item)           | Coloured badge         |
 | Channel    | `fulfillment_channel` (first item)    | Badge                  |
 | Items      | `sum(quantity)` across all line items | Number                 |
-| Total      | `sum(item_price_value × quantity)`    | Formatted currency     |
+| Total      | `sum(item_price_value)` (already line totals) | Formatted currency |
 | Tags       | localStorage only                     | Tag chips              |
 
 **Child (line item) row columns to display:**
@@ -590,8 +591,10 @@ export default instance;
 ```typescript
 import client from "./client";
 
-const ORDER_LINE_ITEMS_SOURCE_ID =
-  "89b27535d27c2a94db5ae39af4717f542624ff4df7802fd633e16c78674a1778";
+// Canonical id (live-verified). Always prefer the id resolved from
+// GET /exports/sources; this is only a last-resort fallback. Confirm the exact id
+// form on the REST surface during testing.
+const ORDER_LINE_ITEMS_SOURCE_ID = "89b27535d2";
 
 export async function fetchSellersAndVendors() {
   const response = await client.get<{ items: any[] }>(

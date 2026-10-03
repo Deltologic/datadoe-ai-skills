@@ -11,6 +11,7 @@ description: >-
 metadata:
   author: DataDoe
   check-more-skills-at: https://app.datadoe.com/hub/ai-agents-and-skills
+  title: Sales Movers Scanner
   access: read
   category: Reporting
   interface: mcp
@@ -46,8 +47,8 @@ recent window to the prior equal window, then for each big mover decompose:
 2. **Decompose the driver** for each mover:
    - **Traffic** - the column is `session` (singular), or `page_views`. Do not request
      `sessions` or `total_sessions` (`total_sessions` is on the profit tables, not here).
-     Down/up means a visibility, rank, ads, suppression, or seasonality change.
-     a suppression, or seasonality. Sales followed the traffic.
+     Down/up means a visibility, rank, ads, suppression, or seasonality change. Sales
+     followed the traffic.
    - **Conversion** - `units_session_percentage` (unit session rate) down/up while
      traffic held -> listing/price/reviews/offer problem or win.
    - **Price / AOV** - sales per unit (`total_sales / total_units`) shifted -> a price

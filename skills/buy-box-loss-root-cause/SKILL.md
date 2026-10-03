@@ -8,6 +8,7 @@ description: >-
 metadata:
   author: DataDoe
   check-more-skills-at: https://app.datadoe.com/hub/ai-agents-and-skills
+  title: Buy Box Loss Root Cause
   access: read
   category: Listings & Content
   interface: mcp
@@ -31,8 +32,10 @@ synthesizes it from the buy-box % and price columns.
 
 ## The framework. The Buy Box gates (check in order)
 
-1. **Ownership** - `buybox_percentage` well below 100 on a SKU with sales/traffic =
-   you're sharing or losing the box.
+1. **Ownership** - the **latest-day** `buybox_percentage` well below 100 on a SKU with
+   sales/traffic = you're sharing or losing the box *right now*. Use the most recent
+   complete day (optionally a short 3-7 day trend), never a 30-day average - averaging
+   masks a dip-then-recovery and flags SKUs that already hold the box again.
 2. **Price** - `your_price` above `featuredoffer_price` (or `lowest_price_new_plus_
    shipping`) = you're priced out of the box.
 3. **Stock** - `available = 0` / very low = Amazon can suppress your offer.
@@ -44,23 +47,43 @@ Report the first gate that fails, biggest-revenue SKU first.
 
 - MCP base: `https://mcp.datadoe.com/mcp/v1`
 - Data sources (no dedicated buy-box table - synthesize):
-  - `Sales & Traffic by ASIN & Date` (`amazon_sales_and_traffic_with_cogs`) - `buybox_percentage`,
-    `total_sales`, `page_views`, `total_units`, `child_asin`, `product_name`. This table
-    has no `sku` column.
-  - `FBA Inventory Health` (`amazon_fba_inventory_health`) - `sku`, `child_asin`, `your_price`,
-    `sales_price`, `featuredoffer_price`, `lowest_price_new_plus_shipping`, `available`.
+  - `Sales & Traffic by ASIN & Date` (`amazon_sales_and_traffic_with_cogs`) - `buybox_percentage`
+    (a **per-day series**), `total_sales`, `page_views`, `total_units`, `child_asin`,
+    `product_name`. This table has no `sku` column. Read the latest *complete* day, not a
+    window average. The table lags Amazon by roughly 6 days and the newest day present is
+    often partial, so detect the last complete day first (see step 3).
+  - `FBA Inventory Health` (`amazon_fba_inventory_health`) [premium] - `sku`, `child_asin`,
+    `your_price`, `sales_price`, `featuredoffer_price`, `lowest_price_new_plus_shipping`,
+    `available`. A **current** snapshot (one day) - price lives here, not in the sales table.
+    Premium guard: check `exports_source_get` first; if `enabled: false` or the export
+    returns 0 rows, tell the user the table is not in their plan and fall back for price to
+    `amazon_fba_stranded_inventory.your_price` or `amazon_listings_with_cogs.listing_price_value`
+    (with `fba_quantity_available` for stock) - never render zeros as a price gap.
 - Currency/marketplace: localise (e.g. a German marketplace = EUR).
 
 ## Step-by-step workflow (MCP-native)
 
 1. `sellers_and_vendors_list` -> pick the seller.
-2. `exports_sources_get` -> confirm `amazon_sales_and_traffic_with_cogs` + `amazon_fba_inventory_health` enabled.
-3. `exports_create` on `amazon_sales_and_traffic_with_cogs`, last 30d: `groupBy [child_asin, product_name]`,
-   `avg buybox_percentage` (alias bb), `sum total_sales`, `sum page_views`, `sum total_units`.
-   Keep rows with `total_units > 0`. This finds ASINs with traffic/sales but low buy-box %.
+2. `exports_sources_get` -> confirm `amazon_sales_and_traffic_with_cogs` + `amazon_fba_inventory_health`
+   enabled (if inventory health is disabled or empty, use the price fallback listed above).
+3. `exports_create` on `amazon_sales_and_traffic_with_cogs`, last 30d, **daily** (do NOT
+   average bb over the window): `groupBy [date, child_asin, product_name]`, pull the per-day
+   `buybox_percentage` series plus `sum total_sales`, `sum page_views`, `sum total_units`.
+   Keep ASINs with `total_units > 0` over the window. Then per ASIN derive:
+   - **Last complete day** = the latest `date` whose account-wide units and row count are
+     in line with the preceding days. The table lags ~6 days and the newest 1-2 days present
+     are often partial, so `MAX(date)` alone is not safe - name the day you anchored on.
+   - **bb_now** = `buybox_percentage` on that last complete day (the headline).
+   - **bb_trend** (optional) = last 3-7 complete days vs the prior span, to tell "just lost
+     it" from "chronically low".
+   Flag an ASIN as a *current* buy-box loss only if **bb_now** is low - not if only its
+   30-day average is (a 30-day mean would flag an ASIN that dipped and has since recovered).
 4. `exports_create` on `amazon_fba_inventory_health`, latest snapshot: `sku`, `child_asin`, `your_price`,
-   `featuredoffer_price`, `lowest_price_new_plus_shipping`, `available`.
-5. Join inventory onto the ASIN. `amazon_fba_inventory_health` can have several SKUs
+   `featuredoffer_price`, `lowest_price_new_plus_shipping`, `available`. This is a **current**
+   snapshot (one day) - price lives here, not in the sales table.
+5. Join inventory onto the ASIN with **matching time bases**: pair the current price snapshot
+   with **bb_now** (the last complete day), never the 30-day average - both sides of the join
+   must describe the same recent moment. `amazon_fba_inventory_health` can have several SKUs
    for one `child_asin`. Do not collapse those rows or average `your_price`.
    - Price: for each SKU with a non-null `your_price`, gap = `your_price - featuredoffer_price`.
      Report the SKU that is actually in stock (`available` > 0). If several are in stock,
@@ -72,9 +95,9 @@ Report the first gate that fails, biggest-revenue SKU first.
 ## Output format
 
 ```
-Buy Box Loss - {marketplace} - last 30d
+Buy Box Loss - {marketplace} - buy-box as of {latest day}  (sales over last 30d)
 
-SKU                 BuyBox%  Sales    Likely cause            Fix
+SKU                 BB%(now) Sales    Likely cause            Fix
 {sku}               {bb}%    {cur}..  priced out (+{cur}gap)  match/beat {cur}{feat}
 {sku}               {bb}%    {cur}..  out of stock            restock (see restock skill)
 {sku}               {bb}%    {cur}..  fulfilment/health       check FBM/AHR
@@ -84,8 +107,10 @@ Biggest sales at risk: {sku} ({cur}.. exposed).
 
 ## Worked example (illustrative)
 
-Pulling buy-box % per SKU surfaces the low-ownership ones with real sales. The skill
-then joins today's prices: if `your_price` 12.90 > `featuredoffer_price` 11.95, the
+Reading each SKU's **latest-day** buy-box % (not a 30-day average) surfaces the ones
+losing the box *now* with real sales - a SKU that dipped mid-month but sits at 98% today
+is not flagged. The skill then joins today's prices: if `your_price` 12.90 >
+`featuredoffer_price` 11.95, the
 cause is "priced out by 0.95" and the fix is to match/beat 11.95 (or hold price if
 margin matters more than the box). If instead `available = 0`, the cause is stock,
 routed to the restock skill. Same signal, different fix - the skill picks the right
@@ -94,6 +119,9 @@ one.
 ## Quality self-check
 
 - Did I only flag SKUs with real sales/traffic (ignore dead SKUs at bb 0)?
+- Did I key off the latest-day `buybox_percentage` (or a short trend), NOT a 30-day
+  average, so recoveries aren't misread as current losses?
+- Did I pair today's price snapshot with the current buy-box read (same time basis)?
 - Did I check price gap AND stock before blaming "fulfilment"?
 - Did I rank by revenue at risk, not by lowest bb%?
 - Did I keep margin in mind (winning the box below cost isn't a win)?
@@ -102,7 +130,11 @@ one.
 
 - Chasing buy-box on tiny long-tail SKUs (bb 0 but 1 unit/mo) - not worth it.
 - Recommending a price cut when the real cause is a stockout.
-- Averaging buy-box % across a stockout gap and misreading it.
+- Averaging buy-box % across the window - `buybox_percentage` is a daily series; a SKU
+  that dipped and recovered reads as a chronic loss. Use the latest-day value (or a short
+  trend), not a 30-day mean.
+- Comparing a 30-day average buy-box to a single-day price snapshot - two different time
+  bases; pair current with current.
 - Treating a null `buybox_percentage` as a lost box - null usually means no
   competition data (often you're the sole seller); skip it, don't flag it.
 - Racing a hijacker to the bottom instead of enforcing (flag for enforcement).
