@@ -93,7 +93,7 @@ metadata:
 12. (Spawn a sub-agent for this step) Fetch the seller's active listings **for the candidate ASINs only** (the unique ASINs from step 11 / `asins.json`) using DataDoe, and save to CSV:
     - Source: `amazon_listings_with_cogs`.
     - Filter: `child_asin IN [the step-11 candidate ASINs]` AND `listing_status = Active`.
-    - This targets the few dozen ASINs from the search results, so it **never hits the 3,500-row export cap and needs no pagination** - correct regardless of catalog size. Do NOT dump the whole catalog: an unordered `listing_status = Active` pull on a large catalog can drop an actively-selling owned ASIN off page 1, which then reads as "not mine" and shows a competitor beating a rank that is actually yours.
+    - This targets the few dozen ASINs from the search results, so it **never hits the export row cap (1,000 rows JSON / 5,000 CSV) and needs no pagination** - correct regardless of catalog size. Do NOT dump the whole catalog: an unordered `listing_status = Active` pull on a large catalog can drop an actively-selling owned ASIN off page 1, which then reads as "not mine" and shows a competitor beating a rank that is actually yours.
     - Request `child_asin` in the columns. DataDoe prepends 8 utility columns before `child_asin`, so downstream parsing must be **header-based, not column-position** (see `scripts/mark-my-listings.js`).
     - (Fallback, only if a full-catalog snapshot is ever required: add a deterministic `orderByColumn` and loop - "while returned rowCount == limit, repeat with skip += limit" - so the cap never silently drops rows.)
 13. (Spawn a sub-agent for these steps) Run the file-based post-processor for the step 11 ASIN list, step 12 listings export, and the dashboard build:

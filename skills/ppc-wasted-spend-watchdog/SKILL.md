@@ -78,16 +78,19 @@ modifier you checked in the recommendation.
 - Data sources:
   - `Search Term Performance (Ads)` (`amazon_ads_search_terms_by_campaign_by_date`) - the customer search term that triggered the ad. Primary source:
     `ad_search_term`, `ad_spend`, `ad_clicks`, `ad_orders`, `ad_sales`, `ad_campaign_type`,
-    plus `ad_campaign_id` / `ad_group_id` (needed so the apply skills can target).
+    plus `ad_campaign_id` / `ad_group_id` (needed so the apply skills can target) and
+    `ad_keyword_bid` (the bid on the keyword that matched - this table does carry it).
   - `Keyword Targeting Performance` (`amazon_ads_targeting_by_campaign_by_date`) - your bid keywords, for the
     keyword-level view. It carries **no bid column** - current bids come from
     `AMAZON_ADS_TARGETS_FIND` (see the bid-optimizer skill).
-- **`having` is not supported** (confirmed rejected: `Unrecognized key: "having"`), and
-  filters are pre-aggregation only - you can't filter on summed `orders`. So pull the
-  (paginated) rows and bucket dead / bleeder **client-side**; don't waste a call trying to
-  filter `orders = 0` server-side.
-- **Pagination:** the export API accepts `skip`, so a high-volume account can be paged to
-  completion (`skip = 0, 3500, 7000, ...`) rather than truncated at the 3,500-row cap.
+- **`having` is supported** (post-aggregation, on `groupBy` fields and aggregation aliases;
+  `filters` stay pre-aggregation). Use it to pull the dead bucket in one call:
+  `having clicks_sum >= 10 AND orders_sum = 0`. Bleeders need ACoS, which is a ratio -
+  compute that client-side from the summed columns.
+- **Row caps and pagination:** 1,000 rows per JSON export, 5,000 per CSV. A spend-sorted
+  pull keeps the big terms; the `having` export keeps the dead ones (in testing all 35 dead
+  terms were on page 1 by spend anyway). Paginate with `skip` in `limit` steps only when a
+  page returns exactly `limit` rows and you need the remainder.
 - Currency/marketplace: read `marketplace_country_code`; localise (e.g. a German marketplace = EUR).
 - Set the break-even ACoS from the user (default 30% if unknown) - margins differ by
   product, so make it adjustable (optionally per product group).
@@ -102,13 +105,11 @@ modifier you checked in the recommendation.
      for readability)
    - `aggregations` sum: `ad_spend`, `ad_clicks`, `ad_orders`, `ad_sales`
    - filter `ad_campaign_type = SPONSORED_PRODUCTS`.
-   - **Paginate the full set** to catch dead spend: bleeders sit at the top by spend, but
-     dead terms hide in the long tail, and a single spend-sorted pull truncates exactly
-     that tail at the 3,500-row cap. Loop `skip` in 3,500 increments (`skip = 0, 3500,
-     7000, ...`) until a page returns < 3,500 rows. (Sorting by the orders alias `ASC`
-     also surfaces 0-order terms first so they survive a partial pull - but pagination is
-     the proper fix.) Ads exports can queue slowly, so budget for polling each page.
-4. Poll, download, and bucket **client-side** (no server-side `having`). Compute per term:
+   - Two exports: (a) sorted by the spend alias `DESC`, `limit` 5,000 CSV, for the top
+     spenders and bleeders; (b) the same `groupBy` with `having clicks_sum >= 10 AND
+     orders_sum = 0` for the complete dead bucket. If (a) returns exactly `limit` rows and
+     you need the tail, page with `skip`. Ads exports can queue slowly, so budget for polling.
+4. Poll, download, and bucket. The `having` export is the dead bucket; for the rest compute per term:
    ACoS = spend / sales (guard sales=0), orders. First set aside ASIN-target terms
    (`b0...` strings) as competitor targeting, not waste. Then bucket: dead (orders=0,
    clicks >= ~10), bleeder (ACoS > break-even; split barely-over -> trim vs hard -> negate),
@@ -155,11 +156,12 @@ opposite decisions - the skill separates the two.
 - Is ACoS computed per term from summed spend/sales, not a summed ratio?
 - Did I rank by spend wasted (in the account currency), not count?
 - Before a bid cut, did I check placement ACoS, placement and audience modifiers,
-  and `amazon_ads_audiences_by_date`?
-- Did I paginate the full set (`skip = 0, 3500, ...`) so the long tail isn't truncated?
+  and `amazon_ads_audiences_by_date` (it is empty for some marketplaces - 0 rows for UK
+  while DE had rows - so skip that check and say so when the export returns nothing)?
+- Did I pull the dead bucket with `having` (or paginate) so it is complete, not truncated?
 - Did I set aside ASIN-target (`b0...`) terms as competitor targeting, not waste?
 - Did I split bleeders into bid-trim (barely over) vs negate (hard, 100%+)?
-- Did I bucket client-side (no server-side `having`)?
+- Did I compute ACoS and the bleeder split client-side (ratios are never summed)?
 
 ## Common mistakes
 
@@ -168,9 +170,10 @@ opposite decisions - the skill separates the two.
   it out, don't auto-cut).
 - Confusing search term (shopper query) with keyword (your bid).
 - Summing the ACoS column - recompute it.
-- Judging from a single truncated pull - the 3,500 cap cuts the long tail where dead
-  spend hides; paginate with `skip` to completion.
-- Trying to filter `orders = 0` with `having` - not supported; bucket client-side.
+- Judging from a single truncated pull - caps are 1,000 rows JSON / 5,000 CSV; use the
+  `having` export for the dead bucket and `skip` pagination if a page fills to `limit`.
+- Treating a 0-row `amazon_ads_audiences_by_date` export as "no audience modifiers" - the
+  table is empty for some marketplaces; say the check was skipped.
 - Negating ASIN-target (`b0...`) terms - that's competitor targeting, not junk.
 - Negating a barely-over bleeder that converts in volume - trim its bid instead.
 

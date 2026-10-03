@@ -178,10 +178,7 @@ Mine 3-4 star reviews for the real audience language and objections.
     harvest the SQP set may miss).
   - `amazon_fba_inventory_health` (optional, **premium**) - `your_price`, `featuredoffer_price`,
     `lowest_price_new_plus_shipping`, `available` for a price/stock read (a CVR leak is
-    often price or an out-of-stock, not copy). If `exports_source_get` says `enabled: false`
-    or the export returns 0 rows, say the table is not in the plan and use
-    `amazon_listings_with_cogs.listing_price_value` / `fba_quantity_available` instead -
-    never render zeros.
+    often price or an out-of-stock, not copy). Premium guard: check `exports_source_get` first - `enabled: false` (or `isPremium: true` without plan access) means the table is not in the plan: tell the user so and use `amazon_listings_with_cogs.listing_price_value` / `fba_quantity_available` instead. A 0-row export on its own means no data in the window, not a plan problem - say which it is; never render zeros.
   - `amazon_brand_analytics_search_terms_weekly` (Brand Registry only, optional) - top
     terms with #1-3 click/conversion share. It is **org/marketplace-scoped, not account-scoped**
     (no `seller_or_vendor_id` column) - filter by marketplace and treat the clicked ASINs as

@@ -59,26 +59,27 @@ implausible reco is noise, not a signal).
   `available`, `inbound_quantity`, `days_of_supply`, `units_shipped_t30`,
   `units_shipped_t7`, `recommended_ship_in_quantity`, `recommended_ship_in_date`,
   `fba_inventory_level_health_status`. Not available in MX.
-  **Premium / emptiness guard:** check `exports_source_get` first. If `enabled: false`, or
-  the export returns **0 rows** (the table is empty for non-premium orgs), tell the user
-  "FBA Inventory Health is not available in your plan - using Amazon's restock
-  recommendations instead" and switch to the fallback below. Never render an empty
-  catalog or zeros as "nothing to restock".
+  **Premium / emptiness guard:** Premium guard: check `exports_source_get` first - `enabled: false` (or `isPremium: true` without plan access) means the table is not in the plan: tell the user so and switch to the fallback below ("FBA Inventory Health is not available in your plan - using Amazon's restock recommendations instead"). A 0-row export on its own means no data in the window, not a plan problem - say which it is; never render zeros.
+  The table is also empty (0 rows) for non-premium orgs, so a 0-row result on this table
+  means: fall back. Never render an empty catalog as "nothing to restock".
 - **Fallback source:** `FBA Restock Recommendations` (`amazon_fba_restock_recommendations`,
   free) - Amazon's own restock report. Per SKU/day: `sku`, `child_asin`, `product_name`,
   `available`, `inbound` (+ `working` / `shipped` / `receiving` breakdown),
   `days_of_supply_at_amazon_fulfillment_network`,
   `total_days_of_supply_including_units_from_open_shipments`, `alert` (`out_of_stock` /
   `low_stock` / `""`), `recommended_replenishment_qty`, `recommended_ship_date`,
-  `units_sold_last_30_days`. Multiple dates per SKU - collapse to `MAX(date)`; state the
-  snapshot date and flag staleness (the data can lag - a July run showed mid-June as the
-  latest snapshot).
+  `units_sold_last_30_days`, `country`. **Multi-country table:** one UK seller returned
+  DE/ES/FR/GB/IT rows (43k rows a day); always filter `country = <marketplace code, e.g.
+  GB>` or a UK ranking is built from other marketplaces' rows and holds zero GB rows.
+  Multiple dates per SKU - collapse to `MAX(date)`; state the snapshot date and flag
+  staleness (the data can lag - 13 days behind in an October run).
 - **Velocity cross-check:** `Profit by SKU & Date` (`amazon_profit_by_sku_and_date`)
-  [premium] - real per-SKU units sold. The recommendations table's `units_sold_last_30_days`
-  **under-reports** (in testing it read 0 for ~99% of the catalog while those SKUs were
-  genuinely selling), so when this table is available use it as the authoritative velocity -
-  otherwise genuine sellers get suppressed as "dead stock". If it is not in the plan, use
-  `units_shipped_t30` (inventory health) and say the velocity is Amazon's own figure.
+  [premium] - real units sold per SKU and per `child_asin`. Velocity columns on the
+  inventory tables are **per SKU**: sibling SKUs of a live ASIN read 0 (1,694 "dead" SKUs
+  on selling ASINs in testing), so judge velocity per `child_asin` (sum this table over
+  the ASIN's SKUs) before calling a SKU dead or a recommendation "noise". If this table is
+  not in the plan, sum `units_shipped_t30` / `units_sold_last_30_days` across the ASIN's
+  SKUs and say the velocity is Amazon's own figure.
 - Lead time / target cover: ask the user (default 30 days).
 
 ## Step-by-step workflow (MCP-native)
@@ -88,18 +89,24 @@ implausible reco is noise, not a signal).
    If `enabled: false`, go straight to the fallback (step 3b). Also check
    `amazon_fba_restock_recommendations` and `amazon_profit_by_sku_and_date`.
 3. **a) Primary:** `exports_create` for `amazon_fba_inventory_health`, latest snapshot
-   (from/to = last ~2 days), columns as listed above. Order by `days_of_supply` ASC. The
-   catalog is thousands of SKUs - pull to the **3,500-row cap or paginate**, do NOT cap at
-   ~500; sort so the most-urgent rows survive truncation. **If the export returns 0 rows,
-   treat the table as unavailable and run step 3b.**
+   (`from` = `to` = the latest date; a 2-day range returns two snapshots), filter
+   `marketplace_country_code = <marketplace>`, columns as listed above. **Row caps are
+   1,000 (JSON) / 5,000 (CSV)** and a catalog can exceed them (7,554 rows here), so do not
+   rely on sorting: `days_of_supply ASC` puts the nulls first and truncation keeps the
+   wrong rows. Pull the urgent sets server-side instead - (i) `available = 0 AND
+   units_shipped_t30 > 0` (out now), (ii) `days_of_supply notNull AND days_of_supply <
+   <lead time>` (imminent) - and paginate with `skip` if a page fills to `limit`. **If the
+   export returns 0 rows, treat the table as unavailable and run step 3b.**
    **b) Fallback:** `exports_create` for `amazon_fba_restock_recommendations`, columns:
    `sku`, `child_asin`, `product_name`, `available`, `inbound`,
    `days_of_supply_at_amazon_fulfillment_network`,
    `total_days_of_supply_including_units_from_open_shipments`, `alert`,
    `recommended_replenishment_qty`, `recommended_ship_date`, `units_sold_last_30_days`,
-   `date`. Same row cap / pagination rule; sort by `alert` (out_of_stock first) then
-   `total_days_of_supply_including_units_from_open_shipments` ASC. Say in the output which
-   source the ranking is built on.
+   `date`, `country`, **filter `country = <marketplace code>`** (multi-country table - see
+   Configuration). Same row caps; pull `alert IN (out_of_stock, low_stock)` server-side,
+   then sort by `alert` (out_of_stock first) and
+   `total_days_of_supply_including_units_from_open_shipments` ASC; paginate if a page
+   fills to `limit`. Say in the output which source the ranking is built on.
 4. Poll, download, and **collapse to `MAX(date)` per SKU** so you rank on one current
    snapshot, not a mix of days. Record the snapshot date; flag the lag if it is well behind
    today.
@@ -158,9 +165,11 @@ That inbound-aware ranking is the point: at-zero alone isn't the trigger; at-zer
 - Did I fall back to 30-day velocity when days-of-supply is null, and skip no-velocity
   dead stock (don't restock a non-seller)?
 - Did I sanity-check the recommended quantity against velocity before surfacing it?
-- Did I cross-check velocity against `amazon_profit_by_sku_and_date` instead of trusting
-  the recommendations table's `units_sold_last_30_days` (which under-reports)?
-- Did I pull past ~500 rows (to the 3,500 cap / paginate) so the full catalog is covered?
+- Did I judge velocity per `child_asin` (sibling SKUs of a live ASIN read 0 on their own)
+  using `amazon_profit_by_sku_and_date` where available?
+- Did I filter `country` / `marketplace_country_code` to the seller's marketplace?
+- Did I pull the urgent sets server-side (and paginate) instead of trusting a sorted
+  5,000-row page?
 
 ## Common mistakes
 
@@ -170,13 +179,15 @@ That inbound-aware ranking is the point: at-zero alone isn't the trigger; at-zer
 - Recommending restock for dead stock (0 sales) - that's a removal decision, not restock.
 - Ignoring null days-of-supply instead of computing from velocity.
 - Using a stale snapshot (multiple dates) - collapse to MAX(date), and flag the lag.
-- Capping the pull at ~500 rows on a multi-thousand-SKU catalog - pull to the 3,500 cap
-  or paginate, sorted so the most-urgent rows survive truncation.
+- Trusting one sorted page on a multi-thousand-SKU catalog - caps are 1,000 JSON / 5,000
+  CSV and `days_of_supply ASC` sorts nulls first; filter the urgent sets server-side.
+- Forgetting the `country` filter on `amazon_fba_restock_recommendations` - a UK ranking
+  built from DE/ES/FR rows.
 - Surfacing Amazon's recommended quantity blindly - sanity-check it against real velocity
   (a 4,000-unit reco on a 0-sales SKU is noise).
-- Trusting the recommendations table's `units_sold_last_30_days` alone - it under-reports
-  (0 for ~99% of the catalog in testing); cross-check real velocity from
-  `amazon_profit_by_sku_and_date` or you'll suppress genuine sellers as "dead stock".
+- Calling a SKU dead from its own `units_sold_last_30_days` / `units_shipped_t30` - sibling
+  SKUs of a selling ASIN read 0; judge velocity per `child_asin` (and a 4,452-unit reco on a
+  sibling SKU of an ASIN selling 2,775 units a month is not noise).
 - Promising a ship date - `recommended_ship_date` is often null; render "n/a" and rank on
   days-of-supply instead.
 

@@ -80,9 +80,7 @@ sales-only snapshot use the **Weekly Sales Briefing** instead. Live from DataDoe
 
 1. `sellers_and_vendors_list` -> pick the seller.
 2. `exports_sources_get` -> confirm sources `enabled`. `amazon_profit_by_date`,
-   `amazon_profit_by_sku_and_date` and `amazon_fba_inventory_health` are **premium**: if any
-   is `enabled: false`, or its export returns 0 rows, tell the user "this table is not
-   available in your plan" and stop (or drop that section) - never render a review of zeros.
+   `amazon_profit_by_sku_and_date` and `amazon_fba_inventory_health` are **premium**. Premium guard: check `exports_source_get` first - `enabled: false` (or `isPremium: true` without plan access) means the table is not in the plan: tell the user so and stop (or drop that section). A 0-row export on its own means no data in the window, not a plan problem - say which it is; never render zeros.
 3. **Calibrate completeness first (don't assume a lag).** `exports_create` once on
    `amazon_profit_by_date`, ~30 days, `groupBy [date]`, sum `total_sales` per day. On the
    profit sources the completeness signal is **daily sales value, NOT row count** - rows

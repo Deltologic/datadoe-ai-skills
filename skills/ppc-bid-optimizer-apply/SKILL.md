@@ -54,19 +54,25 @@ guardrails below.
   [premium] - per target/day: `action_target_id` (the Ads `targetId`, ready for the UPDATE
   payload), `ad_keyword_bid`, `estimated_break_even_acos` (compare actual ACoS against it
   instead of a flat target when available), `is_attribution_mature` (skip rows where it is
-  false instead of guessing a 7-day cut-off). Premium guard: check `exports_source_get`
-  first - if `enabled: false` or the export returns 0 rows, tell the user the table is not
-  in their plan and fall back to the source below; never render zeros.
+  false instead of guessing a 7-day cut-off). Premium guard: check `exports_source_get` first - `enabled: false` (or `isPremium: true` without plan access) means the table is not in the plan: tell the user so and fall back to the source below. A 0-row export on its own means no data in the window, not a plan problem - say which it is; never render zeros.
+  Note: `estimated_break_even_acos` is null when the account has no COGS uploaded - then
+  use the user's target ACoS.
 - Read (performance), fallback: `amazon_ads_search_terms_by_campaign_by_date` - per keyword/day: `ad_keyword_id`, `ad_keyword`, `ad_keyword_bid`
   (current bid), `ad_campaign_id`, `ad_group_id`, `ad_spend`, `ad_sales`, `ad_clicks`,
   `ad_orders`, `ad_match_type`, `ad_campaign_type`. Aggregate by keyword for ACoS.
   NOTE: `ad_sales` / `ad_orders` are **7-day attributed** - exclude ~the last 7 days
   (see the workflow) so recent under-attribution doesn't trigger over-aggressive cuts.
-- Resolve targetId (do NOT assume `ad_keyword_id == targetId`): the
-  `AMAZON_ADS_TARGETS_FIND` action returns the true `targetId` + live `bid`. Filter with
-  `adProductFilter.include: ["SPONSORED_PRODUCTS"]` (FIND requires **exactly one** ad
-  product) plus `keywordFilter` / `targetIdFilter`. FIND is the source of truth for the
-  `targetId` and the live bid at apply time.
+- Resolve targetId + live bid: the `AMAZON_ADS_TARGETS_FIND` action returns the `targetId`
+  and the live `bid`. Filter with `adProductFilter.include: ["SPONSORED_PRODUCTS"]` (FIND
+  requires **exactly one** ad product) plus `campaignIdFilter` / `keywordFilter` /
+  `targetIdFilter`. **FIND is an Action and needs the connection on Read and write** even
+  though it only reads - a Read-only account answers "Actions are not enabled for this
+  seller or vendor account. Set access level to Read and write". Fallback without it:
+  `amazon_ads_profit_by_target_and_date.action_target_id` is the Ads `targetId` (for
+  Sponsored Products it equals `ad_keyword_id` on keyword rows and `ad_target_id` on
+  auto/product rows), with `ad_keyword_bid` / `ad_target_bid` as the bid - flag those bids
+  as table-sourced (up to a day stale). The real risk is a stale bid or the wrong
+  campaign/ad group, not a different id.
 - Write: `AMAZON_ADS_TARGETS_UPDATE` action, gated behind a `dryRun` step. Confirmed
   payload shape (max **25** targets per action - schema `maxItems: 25`; split longer lists):
   ```
@@ -84,24 +90,30 @@ guardrails below.
   `amazon_ads_ad_groups_raw` are **72-hour snapshots**. Never take the "current" bid from
   them before a write - read it live with `AMAZON_ADS_TARGETS_FIND` (step 3).
 - Inputs from user: target ACoS (e.g. 30%), min/max bid, max step (default +/-30%).
-- **Prerequisites for a live apply:** the seller connection must be **Read and write**
-  (Accounts page), and the `AMAZON_ADS_TARGETS_UPDATE` action type must be **enabled**
-  (Settings > Actions). `dryRun` works regardless - the analysis + preview always run.
+- **Prerequisites:** the seller connection must be **Read and write** (Accounts page) for
+  the live apply **and for the `AMAZON_ADS_TARGETS_FIND` read**, and the
+  `AMAZON_ADS_TARGETS_UPDATE` action type must be **enabled** (Settings > Actions).
+  `dryRun` works regardless - the analysis + preview always run (with table-sourced bids
+  when FIND is unavailable).
 
 ## Step-by-step workflow (MCP-native)
 
 1. `sellers_and_vendors_list` -> pick the seller.
-2. **Performance:** `exports_create` on `amazon_ads_search_terms_by_campaign_by_date`,
-   trailing 30-60d but **ending ~7 days ago** (exclude the last 7 days - SP sales/orders
-   are 7-day attributed, so a fresh window under-counts conversions). `groupBy`
-   `[ad_keyword_id, ad_keyword, ad_match_type, ad_campaign_id, ad_group_id]`, sum
-   `ad_spend/ad_sales/ad_clicks/ad_orders`, carry `ad_keyword_bid`, filter
-   `ad_campaign_type = SPONSORED_PRODUCTS`. Compute ACoS per keyword.
+2. **Performance:** prefer `amazon_ads_profit_by_target_and_date` when it is in the plan
+   (filter `is_attribution_mature = true`, group by `action_target_id`, sum spend/sales/
+   clicks/orders, `max(ad_keyword_bid)`). Otherwise `exports_create` on
+   `amazon_ads_search_terms_by_campaign_by_date`, trailing 30-60d but **ending ~7 days
+   ago** (exclude the last 7 days - SP sales/orders are 7-day attributed, so a fresh window
+   under-counts conversions). `groupBy` `[ad_keyword_id, ad_keyword, ad_match_type,
+   ad_campaign_id, ad_group_id]`, sum `ad_spend/ad_sales/ad_clicks/ad_orders`, take the
+   bid as `max(ad_keyword_bid)` (a non-grouped column cannot be carried through a grouped
+   export), filter `ad_campaign_type = SPONSORED_PRODUCTS`. Compute ACoS per keyword.
+   Many actionable rows are SP **auto targets**, not keywords - treat them as targets.
 3. **Resolve targetId + live bid:** `actions_start` `AMAZON_ADS_TARGETS_FIND` with
-   `adProductFilter.include: ["SPONSORED_PRODUCTS"]` (exactly one) + `keywordFilter` /
-   `targetIdFilter`; poll `actions_get` -> map each `ad_keyword_id` to its true
-   `targetId` + live `bid` (+ `campaignId`, `adGroupId`). Never assume
-   `ad_keyword_id == targetId`.
+   `adProductFilter.include: ["SPONSORED_PRODUCTS"]` (exactly one) + `campaignIdFilter` /
+   `keywordFilter` / `targetIdFilter`; poll `actions_get` -> `targetId` + live `bid` (+
+   `campaignId`, `adGroupId`) per target. If FIND is refused for access level, use
+   `action_target_id` / the table bid as in Configuration and label the bids table-sourced.
 4. **Compute new bid** per the framework + guardrails (>= 5 clicks, +/-30% step cap,
    0.02 floor, user min/max). Build the change list, biggest ACoS offenders first;
    max 25 targets per action - batch longer lists into several actions.
@@ -135,7 +147,8 @@ actionId: null`) even when Actions are disabled - so the preview is always safe 
 
 ## Quality self-check
 
-- Did I resolve the true `targetId` via FIND (not assume `ad_keyword_id == targetId`)?
+- Did I take `targetId` + bid from FIND, or - when FIND was refused for access level - from
+  `action_target_id` with the bids flagged as table-sourced?
 - Did I exclude ~the last 7 days so 7-day attribution didn't trigger over-aggressive cuts?
 - Did I skip keywords with < 5 clicks, cap the step at +/-30%, and floor at 0.02?
 - Did I split the batch so no action carries more than 25 targets?
@@ -155,7 +168,8 @@ actionId: null`) even when Actions are disabled - so the preview is always safe 
 - Taking the "current" bid from `amazon_ads_targets_raw` - a 72-hour snapshot; use the
   live bid from `AMAZON_ADS_TARGETS_FIND`.
 - Sending more than 25 targets in one `AMAZON_ADS_TARGETS_UPDATE` action.
-- Running the real update without the Action enabled / a read+write connection.
+- Running the real update without the Action enabled / a Read-and-write connection - and
+  forgetting that `TARGETS_FIND` needs Read and write too.
 
 ## Notes
 

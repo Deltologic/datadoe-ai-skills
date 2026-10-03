@@ -85,9 +85,7 @@ long-tail ones.
     `primary_action`, `your_price`. Use it as the stranded source of record; the
     `amazon_listings_with_cogs` gate above is the cross-check.
   - `amazon_sales_and_traffic_with_cogs` (or `amazon_profit_by_sku_and_date` [premium]) -
-    recent sales per SKU, to rank issues by revenue at risk. If the premium table is not
-    `enabled` or returns 0 rows, use the sales-and-traffic table and say so - never show
-    zero revenue at risk. (Item name and main image come from
+    recent sales per SKU, to rank issues by revenue at risk. Premium guard: check `exports_source_get` first - `enabled: false` (or `isPremium: true` without plan access) means the table is not in the plan: tell the user so and use the sales-and-traffic table. A 0-row export on its own means no data in the window, not a plan problem - say which it is; never render zeros. (Item name and main image come from
     `summaries`, so a separate catalog source is usually not needed.)
   - `amazon_products_by_child_asin` (optional fallback) - `product_name`, category,
     `product_image_url` if `summaries` name/image is missing or you want richer catalog data.
@@ -108,8 +106,11 @@ long-tail ones.
 3. **Pull listings:** `exports_create` on `amazon_listings_raw` with a bounded column set
    - `sku`, `child_asin`, `marketplace_country_code`, `summaries`, `issues`, `offers`,
    `fulfillment_availability`, `last_seen_at`. Download via `exports_raw_url_get` to a
-   file and parse per row - do not dump raw JSON into context. (The 3500-row export cap
-   applies; for large catalogs paginate or filter.)
+   file and parse per row - do not dump raw JSON into context. **Raw listings cap: 100
+   rows per JSON export / 250 per CSV**, and JSON columns cannot be filtered server-side -
+   a full ~11k-SKU catalog is ~46 CSV pages. Narrow first with `amazon_listings_with_cogs`
+   (status / stock) and pull `amazon_listings_raw` only for the SKUs that need the JSON
+   gates, paginating with `skip`.
 4. **Apply the gates** per SKU/marketplace by parsing the JSON:
    - `summaries.status`: flag `BUYABLE` absent (not purchasable) or `DISCOVERABLE` absent
      (won't show in search).

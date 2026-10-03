@@ -110,12 +110,16 @@ When you do have the periods, track shares weekly:
    under 2 comparable periods, run **baseline mode** (report current share and query
    score + the "not enough history yet" notice) and stop there.
 3. **Pull the weekly series:** `exports_create` on the weekly SQP source filtered to the
-   ASIN over a multi-week window (>= 8 weeks so a trend is visible), columns
-   `date, search_query, search_query_volume, search_query_total_impression_count,
+   ASIN(s) over a multi-week window (>= 8 weeks so a trend is visible), columns
+   `child_asin, date, search_query, search_query_volume, search_query_total_impression_count,
    child_asin_impression_count, child_asin_click_count, child_asin_purchase_count,
    search_query_total_click_count, search_query_total_purchase_count,
    child_asin_search_query_score`. (Do not aggregate away `date` - you need the
-   weekly points.)
+   weekly points.) **Always include `child_asin`** - without it the rows of different ASINs
+   interleave under the same query and date. SQP returns exactly 100 queries per ASIN-week,
+   so 8 weeks x 1 ASIN is ~800 rows (fits the 1,000-row JSON cap) and 3 ASINs is ~2,400:
+   run one export per ASIN, or use CSV output (5,000-row cap). If `rowCount == limit`, the
+   newest weeks may be missing - paginate with `skip` before analysing.
 4. **Build the money-keyword watch-list:** aggregate counts to per-query totals within
    each ASIN and marketplace, keep queries with real volume and non-trivial purchase share, rank by volume x purchase share.
 5. **Per money keyword, compute the weekly series** (query score context, impression
@@ -188,6 +192,8 @@ alert list, ordered by what costs money, not a spreadsheet of every keyword.
 - Reacting to single-week noise instead of a multi-week trend.
 - Treating Search Query Score as organic position, indexing proof, or an alert trigger.
 - Combining scores across ASINs or periods into a "best rank".
+- Omitting `child_asin` from a multi-ASIN export, or letting a 1,000-row JSON export
+  silently drop the latest weeks.
 - Treating a missing query row as zero share without checking export completeness.
 - Flagging a "slip" that is really a stock-out or lost buy-box (traffic falls too) -
   check those before blaming SEO.

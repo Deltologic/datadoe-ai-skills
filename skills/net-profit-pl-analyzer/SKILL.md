@@ -55,16 +55,16 @@ Work top-down, then find the leaks:
   the per-SKU ranking. Its `ad_spend` is Sponsored Products and Sponsored Display,
   same-SKU attribution only. **Do not sum this table's `profit` and call it account
   profit.** That sum will not equal `amazon_profit_by_date.profit`.
-- Both tables are premium. Premium guard: check `exports_source_get` first - if
-  `enabled: false`, or the export returns 0 rows, tell the user "this table is not
-  available in your plan" and stop; never render a P&L of zeros. Filter on `date` (marketplace-local profit date). Do not
-  filter `order_date`: posted-date fees have no order date and a filter on it drops them.
-  `groupBy` must not be empty. `groupBy: []` returns zero rows.
+- Both tables are premium. Premium guard: check `exports_source_get` first - `enabled: false` (or `isPremium: true` without plan access) means the table is not in the plan: tell the user so and stop. A 0-row export on its own means no data in the window, not a plan problem - say which it is; never render zeros.
+  Filter on `date` (marketplace-local profit date); the profit tables have no `order_date`
+  column (`FIELD_NOT_FOUND`). Always group by at least `currency`: an empty `groupBy`
+  returns one account-total row, which hides a multi-currency account.
 - `total_fees`, `fba_fees`, `total_selling_fees`, `cogs_total`, and `ad_spend` are
-  positive costs. `profit` is already `total_sales - total_fees - cogs_total - ad_spend
-  + refund_cost`. Do not add `total_selling_fees` or `fba_fees` on top of `total_fees`.
-  <!-- TODO(Riegel, Q3): confirm the sign of `refund_cost` - the column description does
-  not state it; the `+ refund_cost` term above is kept as-is until confirmed. -->
+  positive costs. `profit` is already `total_sales - sales_tax - total_fees - cogs_total -
+  ad_spend + refund_cost`, where `refund_cost` is **signed** (cash outflows negative, fee
+  reversals positive - per the scheme's `profit` description) and `sales_tax` is subtracted
+  once because `total_sales` is VAT-inclusive on UK/EU marketplaces (~16.6% of sales on a UK
+  account). Do not add `total_selling_fees` or `fba_fees` on top of `total_fees`.
   `total_sales` is shipped item price plus shipping, minus shipping promotions. It does
   not include item tax.
 - Currency: keep `currency` in every `groupBy` and report per currency. Never sum

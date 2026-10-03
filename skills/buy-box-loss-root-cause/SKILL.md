@@ -55,10 +55,8 @@ Report the first gate that fails, biggest-revenue SKU first.
   - `FBA Inventory Health` (`amazon_fba_inventory_health`) [premium] - `sku`, `child_asin`,
     `your_price`, `sales_price`, `featuredoffer_price`, `lowest_price_new_plus_shipping`,
     `available`. A **current** snapshot (one day) - price lives here, not in the sales table.
-    Premium guard: check `exports_source_get` first; if `enabled: false` or the export
-    returns 0 rows, tell the user the table is not in their plan and fall back for price to
-    `amazon_fba_stranded_inventory.your_price` or `amazon_listings_with_cogs.listing_price_value`
-    (with `fba_quantity_available` for stock) - never render zeros as a price gap.
+    Premium guard: check `exports_source_get` first - `enabled: false` (or `isPremium: true` without plan access) means the table is not in the plan: tell the user so and fall back for price to `amazon_fba_stranded_inventory.your_price` or `amazon_listings_with_cogs.listing_price_value` (with `fba_quantity_available` for stock). A 0-row export on its own means no data in the window, not a plan problem - say which it is; never render zeros.
+    Also treat `your_price = 0` as missing (it is 0 on about half the rows), not as a price.
 - Currency/marketplace: localise (e.g. a German marketplace = EUR).
 
 ## Step-by-step workflow (MCP-native)
