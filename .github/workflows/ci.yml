@@ -23,5 +23,8 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable
 
-      - name: Validate skills metadata
+      - name: Validate skills metadata and data-scheme references
+        env:
+          # Fail when a skill still uses a table/column the DataDoe scheme marks deprecated.
+          REQUIRE_NO_DEPRECATED: '1'
         run: yarn test

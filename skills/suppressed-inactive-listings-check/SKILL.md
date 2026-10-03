@@ -84,10 +84,12 @@ is the fix:
 
 Rank the failures by **revenue at risk** (recent sales, or units on hand x price for
 stranded stock), not by count - one suppressed hero SKU outranks ten dead long-tail
-ones. Recent sales are **ASIN-level** (the sales table has no `sku` column): attribute an
-ASIN's sales to a flagged SKU only when **no** sibling SKU of that ASIN is BUYABLE; when a
-sibling is BUYABLE, label the amount "covered by sibling SKU <sku>" rather than at risk,
-and say "ASIN-level" in the output.
+ones. Recent sales come from `amazon_profit_by_sku_and_date` at **SKU grain**
+(`sum(total_sales)` per `sku` over the last 30 days): a flagged SKU's own sales are its
+revenue at risk. Keep `child_asin` alongside for the sibling note: when a flagged SKU has 0
+sales in the window and a sibling SKU on the same ASIN is BUYABLE, label it "covered by
+sibling SKU <sku>" (the ASIN keeps selling through the sibling) rather than "nothing at
+risk".
 
 ## Configuration
 
@@ -109,26 +111,27 @@ and say "ASIN-level" in the output.
   - `amazon_listings_with_cogs` [premium] - the narrowing table and the stranded gate:
     `listing_status` (Active/Inactive/Incomplete), `fba_quantity_available`,
     `fba_has_stranded_inventory` (true when at least one stranded-inventory row exists for
-    the SKU), `listing_name`, `listing_price_value`. Premium guard: check
-    `exports_source_get` first - `enabled: false` (or `isPremium: true` without plan
-    access) means the table is not in the plan: tell the user so and fall back to the raw
+    the SKU), `listing_name`, `listing_price_value`. Premium note: a premium export costs 5 AI Tokens instead of 2 - nothing else differs, and the table is part of the always-on default dataset, so it is never disabled. A 0-row export means no data in the window or an initial load still in progress - say which, and fall back to the raw
     listings table only (status from `summaries.status`, FBM quantity from
     `fulfillment_availability[].quantity`, FBA stock from
-    `amazon_fba_inventory_by_asin_by_country.quantity_for_local_fulfillment`). A 0-row
-    export on its own means no data in the window, not a plan problem - say which it is;
-    never render zeros. **Dedupe on `sku`** before joining: a SKU can appear twice with
+    `amazon_fba_inventory_by_asin_by_country.quantity_for_local_fulfillment`); never
+    render zeros. **Dedupe on `sku`** before joining: a SKU can appear twice with
     different `listing_id` (150 of 11,449 on one account) - keep one row per SKU (max
     `fba_quantity_available`), never join on raw row count.
   - `amazon_fba_stranded_inventory` - Amazon's own stranded list and the stranded source
     of record: `stranded_reason`, `primary_action`, `your_price`, plus fulfillable units.
     `amazon_listings_with_cogs.fba_has_stranded_inventory` is derived from it and is the
     cross-check / gate.
-  - `amazon_sales_and_traffic_with_cogs` (or `amazon_profit_by_sku_and_date` [premium]) -
-    recent sales, to rank issues by revenue at risk. The sales-and-traffic table is
-    **ASIN-level** (`child_asin`, no `sku` column): join on `child_asin`, and attribute
-    the amount to a flagged SKU only when no sibling SKU of that ASIN is BUYABLE (see the
-    ranking rule above); `amazon_profit_by_sku_and_date` has a `sku` column and gives
-    SKU-grain sales (premium export, 5 AI Tokens). Premium note: a premium export costs 5 AI Tokens instead of 2 - nothing else differs, and the table is part of the always-on default dataset, so it is never disabled. A 0-row export means no data in the window or an initial load still in progress - say which, and use the sales-and-traffic table; never render zeros. (Item name and main image come from
+  - `amazon_profit_by_sku_and_date` [premium] - recent sales, to rank issues by revenue
+    at risk. **SKU grain**: `sku`, `child_asin`, `date`, `total_sales`, `total_units_sold`,
+    `currency`; `requiresDatePeriod: true` (send `from`/`to` for the last 30 days);
+    refreshed intraday, sales ~1 day behind. Join on `sku` and attribute the SKU's own
+    30-day `sum(total_sales)` as at risk; keep `child_asin` for the sibling-SKU note (see
+    the ranking rule above). Not used for ranking, but if you read `total_sessions`,
+    `total_page_views` or `avg_buybox_percentage` from this table: they are per-child-ASIN
+    values repeated on every SKU row of that ASIN - group by `[date, child_asin]` and take
+    `max()`, never sum them across SKUs - and they can lag up to 3 days and be revised for
+    30, while sales are ~1 day behind. Premium note: a premium export costs 5 AI Tokens instead of 2 - nothing else differs, and the table is part of the always-on default dataset, so it is never disabled. A 0-row export means no data in the window or an initial load still in progress - say which, and rank by units on hand x `listing_price_value` instead; never render zeros. (Item name and main image come from
     `summaries`, so a separate catalog source is usually not needed.)
   - `amazon_products_by_child_asin` (optional fallback) - `product_name`, category,
     `product_image_url` if `summaries` name/image is missing or you want richer catalog data.
@@ -144,9 +147,9 @@ and say "ASIN-level" in the output.
 ## Step-by-step workflow (MCP-native)
 
 1. `sellers_and_vendors_list` -> pick the seller.
-2. `exports_sources_get` -> confirm `amazon_listings_raw` is `enabled`; run the premium
-   guard on `amazon_listings_with_cogs` (narrowing + stranded gate) and confirm
-   `amazon_fba_stranded_inventory` plus a sales source for ranking.
+2. `exports_sources_get` -> confirm `amazon_listings_raw` is `enabled`; resolve
+   `amazon_listings_with_cogs` (narrowing + stranded gate; premium, never disabled) and
+   confirm `amazon_fba_stranded_inventory` plus `amazon_profit_by_sku_and_date` for ranking.
 3. **Narrow first:** `exports_create` on `amazon_listings_with_cogs` (`sku`, `child_asin`,
    `marketplace_country_code`, `listing_status`, `fba_quantity_available`,
    `fba_has_stranded_inventory`, `listing_name`, `listing_price_value`; limit 5000,
@@ -154,7 +157,8 @@ and say "ASIN-level" in the output.
    stranded (`fba_has_stranded_inventory = true`), and "inactive with stock"
    (`listing_status != Active` AND `fba_quantity_available > 0`). Pull
    `amazon_fba_stranded_inventory` (small, one row per stranded SKU) for the reason and
-   action. If the premium guard failed, skip to step 4 and page the raw table instead.
+   action. If `amazon_listings_with_cogs` returns 0 rows (initial load still in progress),
+   say so, skip to step 4 and page the raw table instead.
 4. **Pull raw listings only for the SKUs that need the JSON gates:** `exports_create` on
    `amazon_listings_raw` with a bounded column set - `sku`, `child_asin`,
    `marketplace_country_code`, `summaries`, `issues`, `offers`,
@@ -178,10 +182,13 @@ and say "ASIN-level" in the output.
 6. **Stranded + context + rank:** stranded = `fba_has_stranded_inventory = true` (step 3)
    with `stranded_reason` / `primary_action` from `amazon_fba_stranded_inventory`; take
    `listing_name` / `listing_price_value`, and item name / main image from `summaries`.
-   Pull recent sales (30d, grouped by `child_asin`) and attribute them per the ASIN-level
-   rule: at risk only when no sibling SKU of the ASIN is BUYABLE, otherwise "covered by
-   sibling SKU <sku>". Sort by revenue at risk (then units on hand x price for stranded,
-   then severity).
+   Pull recent sales: `exports_create` on `amazon_profit_by_sku_and_date`, `from`/`to` =
+   the last 30 days, `groupBy [sku, child_asin]`, `sum(total_sales)`, `sum(total_units_sold)`,
+   `filters: sku in (...)` for the flagged SKUs (CSV; paginate with `skip` above 5,000
+   rows; one row per SKU, so no traffic columns and nothing to de-duplicate). Each flagged
+   SKU's own 30-day sales are its revenue at risk; a flagged SKU with 0 sales whose sibling
+   SKU on the same `child_asin` is BUYABLE gets "covered by sibling SKU <sku>". Sort by
+   revenue at risk (then units on hand x price for stranded, then severity).
 7. **Report** the prioritized list with the failing gate, the exact issue text
    (`code` + `message`), the snapshot age from `last_seen_at`, and the concrete fix.
    Group by severity; call out the single biggest exposure; give the "inactive, no
@@ -194,7 +201,7 @@ Listing Health - {marketplace} - snapshot as of {last_seen_at} ({age})
 Scanned {N} listings · {s} suppressed (LISTING_SUPPRESSED) · {r} catalog item removed · {e} errors ({eb} of them buyable but flagged) · {a} attribute-suppressed · {q} search-suppressed · {t} stranded · {w} warnings
 Context: {i} inactive with no issue (out-of-stock / inactive offers - not suppressions)
 
-TOP EXPOSURE: {sku} ({product}) - {gate failed}, ~{cur}{sales/mo} at risk (ASIN-level, no buyable sibling)
+TOP EXPOSURE: {sku} ({product}) - {gate failed}, ~{cur}{sales/30d} at risk (this SKU's own sales)
 
 ERRORS / SUPPRESSED (fix first)
   SKU              Status          Issue (code)                        Fix                         At risk
@@ -217,15 +224,16 @@ Nothing else flagged: {count} listings healthy.
 
 A scan returns a hero SKU whose issues list carries a `LISTING_SUPPRESSED`
 enforcement and one ERROR: the feed's product type conflicts with Amazon's catalog
-value. That's gate 1+2 failing - the listing is suppressed, no sibling SKU of the ASIN
-is buyable, so it leads the report with the ASIN's trailing monthly sales as the
-revenue at risk and the fix "align the product type to Amazon's value". Separately, a
-SKU is `Active` and buyable by every raw gate but `fba_has_stranded_inventory` is true:
-Amazon's stranded list says "Potential high pricing error" -> "Update price" on 141
-units - stranded inventory, flagged with units x price and that action. A third SKU is
-live but missing a recommended attribute -> a warning, listed below the blockers. The
-4,900 out-of-stock offers that merely lack BUYABLE appear once, as a context count.
-Same scan, three severities, ordered by what costs the most.
+value. That's gate 1+2 failing - the listing is suppressed, so it leads the report with
+its own trailing 30-day sales as the revenue at risk and the fix "align the product type
+to Amazon's value"; a second suppressed SKU on the same ASIN sold nothing in 30 days while
+its sibling stayed buyable, so it reads "covered by sibling SKU" instead of a figure.
+Separately, a SKU is `Active` and buyable by every raw gate but
+`fba_has_stranded_inventory` is true: Amazon's stranded list says "Potential high pricing
+error" -> "Update price" on 141 units - stranded inventory, flagged with units x price and
+that action. A third SKU is live but missing a recommended attribute -> a warning, listed
+below the blockers. The 4,900 out-of-stock offers that merely lack BUYABLE appear once, as
+a context count. Same scan, three severities, ordered by what costs the most.
 
 ## Quality self-check
 
@@ -241,8 +249,9 @@ Same scan, three severities, ordered by what costs the most.
 - Did I gate stranded on `fba_has_stranded_inventory` (with
   `amazon_fba_stranded_inventory` for reason/action), not on `Inactive` + stock alone?
 - Did I dedupe `amazon_listings_with_cogs` on `sku` before joining?
-- Did I rank by revenue at risk / units on hand, not by issue count - and treat sales as
-  ASIN-level, labelling "covered by sibling SKU" when a sibling is BUYABLE?
+- Did I rank by revenue at risk / units on hand, not by issue count - using each SKU's
+  own 30-day sales from `amazon_profit_by_sku_and_date`, and labelling a 0-sales flagged
+  SKU "covered by sibling SKU" when a sibling on the same ASIN is BUYABLE?
 - Did I check each marketplace separately and keep each in its own currency?
 - Did I keep the issue `code` + message so each line is actionable?
 - Did I state the snapshot age from `last_seen_at` (this is a current snapshot, not a
@@ -260,8 +269,9 @@ Same scan, three severities, ordered by what costs the most.
 - Ignoring stranded inventory because the catalog "looks fine" - the cost is real
   (storage on unsellable units).
 - Summing revenue at risk across marketplaces/currencies into one meaningless total.
-- Attributing an ASIN's sales to a suppressed SKU whose sibling SKU is selling fine - the
-  sales table is ASIN-level; label it "covered by sibling SKU", not "at risk".
+- Attributing the ASIN's or a sibling's sales to a suppressed SKU - sales are per `sku`
+  in `amazon_profit_by_sku_and_date`; a flagged SKU with 0 sales and a BUYABLE sibling is
+  "covered by sibling SKU", not "at risk".
 - Dumping the full raw listing JSON into the analysis - pull only the needed fields
   and parse them.
 - Treating `amazon_listings_raw` as a time series - it's a current snapshot; use
@@ -276,4 +286,4 @@ Same scan, three severities, ordered by what costs the most.
   approval) - the skill flags them and points you to the exact issue to resolve.
 - A DataDoe skill, built on DataDoe `amazon_listings_raw` (status, issues, enforcement
   actions, offers) plus `amazon_listings_with_cogs` (status, stock, stranded flag),
-  `amazon_fba_stranded_inventory` and ASIN-level sales data.
+  `amazon_fba_stranded_inventory` and SKU-level sales from `amazon_profit_by_sku_and_date`.

@@ -33,8 +33,8 @@ sales-only snapshot use the **Weekly Sales Briefing** instead. Live from DataDoe
 
 1. **Get the period right first (or every number below is a lag artifact).** Lag varies
    by account and by source: the profit tables are INTRADAY (refreshed ~10am / 1pm / 4pm)
-   with ~1 day of lag observed, while the traffic table used by the Sales-Movers skill
-   lagged 6+ days with mid-series gaps. Never assume "this week = the last 7 calendar
+   with ~1 day of lag observed on sales, while their traffic columns can trail by up to
+   3 days (and older sources lagged 6+ days with mid-series gaps). Never assume "this week = the last 7 calendar
    days" or a fixed lag - detect the **last complete day dynamically** (see workflow),
    anchor both week windows to it, and count each week's **effective (complete) days**.
    If a week is missing days, normalize by effective days or mark it **provisional** -
@@ -71,19 +71,30 @@ sales-only snapshot use the **Weekly Sales Briefing** instead. Live from DataDoe
     `total_sales - sales_tax - total_fees - cogs_total - ad_spend + refund_cost`.
   - `Profit by SKU & Date` (`amazon_profit_by_sku_and_date`) - per-SKU movers.
   - Optional: `FBA Inventory Health` (`amazon_fba_inventory_health`) for stockout watch-outs.
+  - Optional, for traffic / conversion / buy-box watch-outs: the traffic columns already
+    on the two profit tables - `total_sessions`, `total_page_views`,
+    `avg_buybox_percentage` per `date` on `amazon_profit_by_date` (account level) and
+    per SKU / child ASIN on `amazon_profit_by_sku_and_date`. No extra source is needed.
+    Two rules: (1) on the per-SKU table these three columns are **per child ASIN and
+    repeated on every SKU row** of that ASIN - take `max()` per `child_asin`, never
+    `sum()` (summing double-counts every multi-SKU ASIN); (2) the traffic columns may be
+    **delayed up to 3 days and revised for 30 days**, while sales lag ~1 day - so a
+    conversion rate (units / sessions) for the newest 2-3 days is provisional, and a
+    week's sessions can still move after the review is written.
 - **Daily data lag - detect it, don't assume it.** The profit tables are INTRADAY
-  (`exports_source_get` reports refreshes at ~10am / 1pm / 4pm) and lag about 1 day: the
-  newest date is a partial day and the day before it is usually sales-complete but may
-  still be missing fees. The "6+ days behind, every-other-day gaps" pattern belongs to the
-  traffic table (`amazon_sales_and_traffic_with_cogs`, now deprecated), not to these
-  sources. Either way, do NOT just "drop the partial current week": detect the last
+  (`exports_source_get` reports refreshes at ~10am / 1pm / 4pm) and lag about 1 day on
+  sales: the newest date is a partial day and the day before it is usually sales-complete
+  but may still be missing fees. Older sources lagged 6+ days with every-other-day gaps;
+  these do not. Either way, do NOT just "drop the partial current week": detect the last
   complete day dynamically and measure each week's effective days (see workflow). **On
   the profit sources, measure completeness by daily sales value, not row count** - rows
   backfill (all SKUs appear at ~full count) before the sales/profit values settle, so a
   row-count test falsely marks a settlement-incomplete day as complete - **and check fee
-  completeness separately** (fees post after sales; see step 3). If the review is later
-  extended to traffic/conversion/buy-box, that source lags on rows instead, so it uses a
-  row-count signal (as in Sales-Movers) - match the signal to how the source lags.
+  completeness separately** (fees post after sales; see step 3). If the review reads the
+  traffic columns, treat them as a third completeness tier: a day can be sales- and
+  fee-complete while `total_sessions` is still zero or partial for up to 3 days - detect
+  the last traffic-complete day from the daily `total_sessions` the same way, and label
+  any conversion / buy-box figure that includes later days provisional.
 - **Weekly buckets are built in code, not with `dateInterval WEEK`.** `dateInterval WEEK`
   returns fixed Sunday-start calendar buckets regardless of `from`, and its newest bucket
   includes the partial current day; no request parameter shifts the boundary to the last
@@ -228,8 +239,12 @@ difference between a scary wrong number and a correct insight.
 ## Common mistakes
 
 - Assuming "this week = the last 7 calendar days" or a fixed lag - lag differs per source
-  (~1 day on the intraday profit tables, 6+ days with gaps on the old traffic table);
-  detect the last complete day and anchor to it.
+  and per column (~1 day on the intraday profit tables' sales, up to 3 days on their
+  traffic columns, 6+ days with gaps on older sources); detect the last complete day and
+  anchor to it.
+- Summing `total_sessions` / `total_page_views` / `avg_buybox_percentage` across the SKU
+  rows of `amazon_profit_by_sku_and_date` - they are per child ASIN and repeated on each
+  SKU row; take `max()` per `child_asin`.
 - Using `dateInterval WEEK` for the weekly trend - it yields fixed Sunday-start calendar
   buckets, the newest including the partial current day; bucket the daily rows in code.
 - Treating a sales-complete day as margin-complete - fees post later; run the
