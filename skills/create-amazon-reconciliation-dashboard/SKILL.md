@@ -47,7 +47,7 @@ Determine your agent type before starting:
 A grid of cards that recompute on every month change:
 
 - Shipped Orders | Settled Orders | Order Gap
-- Order Revenue | Settled Revenue | Revenue Gap (all in the account `currency`)
+- Order Revenue | Settled Revenue | Revenue Gap (all in the account `currency`). Settled Revenue is the **gross** settled value (`item_price + item_tax` on `ORDER` rows) so it is like for like with the VAT-inclusive `item_price_value`; Revenue Gap = Order Revenue - Settled Revenue on that basis.
 - Total Refunds (count + amount) | Cancelled Orders | Reconciliation Rate (%)
 - When "All 6 Months" is selected, show aggregate totals across the full window.
 
@@ -76,13 +76,15 @@ A grid of cards that recompute on every month change:
 
 ### 6. Revenue Waterfall
 
-- Bars: Gross Revenue → + Tax → - Referral Fees → - FBA Fees → - Refunds → - Other → = Net Payout.
+- Bars: Gross Revenue → + Tax (`item_tax`) → - Tax withheld by Amazon (`marketplace_facilitator_vat`, stored negative) → - Referral Fees → - FBA Fees → - Refunds → - Other → = Net Payout.
+- On UK/EU accounts `marketplace_facilitator_vat` offsets `+ Tax` almost exactly, so show it as its own bar next to Tax (or net the two into one "Tax net of withholding" bar). Never leave it inside "Other" — there it silently cancels the tax the waterfall just added and dominates the "Other" bar.
 - Green bars for positive contributions, red for deductions, blue for the net total.
 
 ### 7. Daily Summary Table
 
 - One row per day. Sortable.
 - Columns: Date | Orders | Settled | Gap | Order Rev | Settled Rev | Rev Gap | Refunds | Refund Amt | Net Total | Status.
+- Settled Rev is gross (`item_price + item_tax` on `ORDER` rows) so Rev Gap compares like for like with the VAT-inclusive `item_price_value`.
 - Status dot: green (gap ≤5), amber (gap ≤20), red (gap >20).
 - Scrollable with sticky header.
 
@@ -101,16 +103,16 @@ The most prominent and functional section. Every order across all 6 months in a 
 | Channel      | orders      | `fulfillment_channel` (Amazon / Merchant)                              |
 | B2B          | orders      | `order_is_business` (Yes/No badge)                                     |
 | Items        | orders      | sum of `quantity`                                                      |
-| Revenue      | orders      | sum of `item_price_value` per order (line totals - the only order-value field), in `currency` |
+| Revenue      | orders      | sum of `item_price_value` per order (line totals - the only order-value field; VAT-inclusive on UK/EU), in `currency` |
 | Tax          | orders      | sum of `item_tax_value` per order, in `currency`                       |
 | Recon Status | computed    | Settled ✓ / Refunded ↩ / Settled+Refunded / Pending ⏳ / Cancelled ✗    |
 | Sett. Date   | settlements | `date` when settlement was posted                                      |
 | Sett. Month  | computed    | derived from settlement date — may differ from Order Month             |
-| Settled      | settlements | sum of settlement `item_price`, in `currency`                          |
+| Settled      | settlements | sum of `item_price + item_tax` on ORDER rows (gross, like for like with `item_price_value`), in `currency` |
 | Fees         | settlements | sum of `referral_fee` + **all `fba_*` fee columns** (not only `fba_per_unit_fulfillment_fee`); stored negative |
-| Refund       | settlements | sum of `refunded_amount` (REFUND rows; negative)                       |
+| Refund       | settlements | sum of `refunded_amount + refund_tax` (REFUND rows; negative; gross, like for like with the order value) |
 | Net Payout   | settlements | sum of settlement `total` (may be negative)                            |
-| Delta        | computed    | order revenue - settled revenue                                        |
+| Delta        | computed    | order revenue - settled revenue (both gross: `item_price_value` vs `item_price + item_tax`); 0.00 on a cleanly settled order |
 | Cross-Month  | computed    | badge showing "↗ Settled in [Month]" if settlement month ≠ order month |
 
 **Required interactive features:**
@@ -118,7 +120,7 @@ The most prominent and functional section. Every order across all 6 months in a 
 - **Synced with month selector**: when a month is selected in the header, the Order Explorer auto-filters to that month's orders. "All 6 Months" shows everything.
 - **Global text search**: live filter as the user types — searches Order ID and all text fields. Debounce ~200ms.
 - **Column filters** (dropdowns above the table):
-  - Status: All / Shipped / Canceled / Pending. Match `amazon_order_status` exactly (`Canceled`, not `Cancelled`).
+  - Status: All / Shipped / Canceled / Pending. Spell `Canceled` (not `Cancelled`). Some marketplaces return `Shipped` / `Unshipped` with a marketplace-specific prefix (`Shipped*` / `Unshipped*`), so bucket those two with a beginsWith/contains match (client-side `startsWith`, export filter operator `beginsWith`) rather than exact equality.
   - Channel: All / Amazon / Merchant.
   - Recon Status: All / Settled / Refunded / Pending / Cancelled.
   - B2B: All / Yes / No.
@@ -200,7 +202,9 @@ The dashboard is generated by chaining DataDoe MCP tool calls. The same data sha
 **3. Create Order-Level Detail exports** (for the Order Explorer):
 
 - Provide individual order granularity across all 6 months.
-- Batch by month if the seller's volume requires it.
+- **Every export is capped** (REST and MCP alike): **1,000 rows as JSON, 5,000 rows as CSV**. A monthly batch never fits — a mid-size seller produces ~1,500 order lines a **day** (~45k a month, plus a similar number of settlement rows).
+- Size the batches from the Daily Summary counts you already have (lines per day), then **batch by day** (by week only for small sellers whose weekly volume stays under the cap) and **page each batch with `limit` / `skip`** (`skip = 0, limit, 2 × limit, …`) until a page comes back with fewer rows than `limit`. A page with exactly `limit` rows means more rows remain — treat an unpaged export that hits the cap as truncated, never as complete.
+- Apply the same day/week batching to the order-matched settlement rows (filter `settlement_type` in `ORDER`, `REFUND`), keyed by posted `date`.
 
 **4. Poll and download ALL exports.**
 
@@ -230,7 +234,7 @@ Orders — group by date:
 
 Settlements — group by date, separated by `settlement_type`:
 
-- `ORDER` entries: count, `item_price`, `item_tax`, `referral_fee`, FBA fees (sum every `fba_*` fee column), `total`. (Fees are negative.)
+- `ORDER` entries: count, `item_price`, `item_tax` (gross settled revenue = `item_price + item_tax`), `marketplace_facilitator_vat` (VAT withheld by Amazon on UK/EU, negative), `referral_fee`, FBA fees (sum every `fba_*` fee column), `total`. (Fees are negative.)
 - `REFUND` entries: count, refunded amount, total.
 - `OTHER` entries: total (fees, reimbursements, etc.).
 
@@ -249,8 +253,8 @@ For each unique `amazon_order_id` across all 6 months:
    - **Cancelled** → `amazon_order_status` is `Canceled` (no settlement expected).
 5. Calculate per-order:
    - Order side (aggregate line items per `amazon_order_id`): revenue (sum `item_price_value`), tax (sum `item_tax_value`), quantity (sum `quantity`).
-   - Settlement side: settled revenue, fees (referral + FBA), refund amount, net total.
-   - Delta: order revenue - settled revenue.
+   - Settlement side: settled revenue = sum of `item_price + item_tax` on `ORDER` rows (gross), fees (referral + FBA), refund amount = sum of `refunded_amount + refund_tax` on `REFUND` rows (gross), net total.
+   - Delta: order revenue - settled revenue, **like for like**: `item_price_value` is VAT-inclusive on UK/EU marketplaces while settlement `item_price` is the ex-VAT principal with the VAT in `item_tax`, so comparing `item_price_value` with `item_price` alone reports a permanent ~17% "gap" (£3,716 instead of £0.01 on a two-day sample where 2,992 of 3,007 matched lines satisfy `item_price_value == item_price + item_tax`). Equivalent ex-VAT form: compare `item_price_value - item_tax_value` with `item_price`.
 6. **Flag cross-month orders**: if the settlement `date` month differs from the order `date` month, tag the row as "cross-month settlement".
 
 **C) Reconciliation logic — business rules:**
@@ -263,11 +267,11 @@ For each unique `amazon_order_id` across all 6 months:
 **D) Summary KPIs** (per month AND overall 6-month totals):
 
 - Total shipped orders vs total settled orders (and gap).
-- Total order revenue vs total settled revenue (and gap).
+- Total order revenue vs total settled revenue (and gap) — settled revenue is gross (`item_price + item_tax`), matching the VAT-inclusive `item_price_value`.
 - Total refund count and amount.
 - Total cancelled orders.
 - Net payout (sum of all settlement totals).
-- Total fees breakdown: referral (`referral_fee`), FBA (sum the `fba_*` columns), other (`total_non_principal_amount` minus referral and FBA fees; do not use the deprecated `total_fees`, removed 2026-10-31). Fees are negative — normalize signs.
+- Total fees breakdown: referral (`referral_fee`), FBA (sum the `fba_*` columns), tax withheld by Amazon (`marketplace_facilitator_vat`), other (`total_non_principal_amount` minus referral, FBA and `marketplace_facilitator_vat`; do not use the deprecated `total_fees`, removed 2026-10-31). Fees are negative — normalize signs.
 - Reconciliation rate: % of shipped orders with a settlement match.
 - Cross-month settlements count: orders placed in month X that settled in month Y.
 
@@ -288,12 +292,13 @@ Generate a **single, self-contained HTML file** with the interactive dashboard:
 | ---------------------- | ----------- | -------------------------------------------------------------------------------------- |
 | `amazon_order_id`      | Key         | Primary grouping key — unique per order                                                |
 | `date`                 | Order       | Purchase date in the marketplace timezone. Prefer this over `order_date` (a duplicate). |
-| `amazon_order_status`  | Order       | `Pending` / `Unshipped` / `Shipped` / `Canceled`                                       |
+| `amazon_order_status`  | Order       | `Pending` / `Unshipped` / `Shipped` / `Canceled`; some marketplaces prefix `Shipped*` / `Unshipped*`, so match those with beginsWith/contains, not `=` |
 | `fulfillment_channel`  | Order       | `Amazon` / `Merchant`                                                                  |
+| `sales_channel`        | Order       | `Amazon.<tld>` for native orders; a non-Amazon value (e.g. a Shopify store) marks a Multi-Channel Fulfillment (MCF) order — the MCF signal |
 | `order_is_business`    | Order       | Boolean → "Yes" / "No" badge in UI                                                     |
 | `quantity`             | Line item   | Units on the line. Sum per `amazon_order_id` for order quantity.                      |
-| `item_price_value`     | Line item   | Line revenue (the line **total**, not a unit price - never multiply by `quantity`). Excludes buyer shipping. Sum per order. |
-| `item_tax_value`       | Line item   | Item tax on the line. Sum per order.                                                   |
+| `item_price_value`     | Line item   | Line revenue (the line **total**, not a unit price - never multiply by `quantity`). Excludes buyer shipping. **VAT-inclusive on UK/EU** (= settlement `item_price + item_tax`). Sum per order. |
+| `item_tax_value`       | Line item   | Item tax on the line (the VAT part of `item_price_value`; equals settlement `item_tax`). Sum per order. |
 
 **Settlements & P&L Components (table `amazon_settlements_with_cogs`; resolve the source id via `/exports/sources`) — expenses are NEGATIVE values:**
 
@@ -304,12 +309,14 @@ Generate a **single, self-contained HTML file** with the interactive dashboard:
 | `order_date`                      | Settlement  | Order purchase date when the row is tied to an order.                       |
 | `order_fulfillment_channel`       | Settlement  | `Amazon` or `Merchant`                                                       |
 | `settlement_type`                 | Settlement  | `ORDER` / `REFUND` / `OTHER`. REFUND is a payout event, not a warehouse return. |
-| `item_price`                      | Amount      | Principal on the row. Expenses elsewhere are negative.                       |
-| `item_tax`                        | Amount      | Item tax on the row                                                          |
+| `item_price`                      | Amount      | **Ex-tax** principal on the row. Compare with the order side only as `item_price + item_tax`. Expenses elsewhere are negative. |
+| `item_tax`                        | Amount      | Item tax (VAT) on the row — the part of `item_price_value` that is missing from `item_price` |
+| `marketplace_facilitator_vat`     | Amount      | VAT withheld by Amazon as marketplace facilitator (UK/EU; negative). Offsets `item_tax` — show next to Tax in the waterfall, not inside "Other". |
 | `referral_fee`                    | Amount      | Amazon referral fee (negative on ORDER rows)                                 |
 | `fba_*` (e.g. `fba_per_unit_fulfillment_fee`, `fba_storage_fee`, `fba_transportation_fee`) | Amount | FBA fees are **split across several columns** - there is no single `fba_fee`. Sum every `fba_*` fee column. |
 | `total_non_principal_amount`      | Amount      | `total` minus `item_price`, in payout sign - the all-in non-principal figure. Do **not** use `total_fees`: deprecated, removed on 2026-10-31. |
-| `refunded_amount`                 | Amount      | Refund principal. Populated on `REFUND` rows.                                |
+| `refunded_amount`                 | Amount      | Refund principal (ex-tax). Populated on `REFUND` rows.                       |
+| `refund_tax`                      | Amount      | Tax part of the refund. Gross refund = `refunded_amount + refund_tax`.      |
 | `total`                           | Amount      | Sum of all amounts on the row. May be negative.                              |
 | `currency`                        | Amount      | Currency code. Do not sum across currencies.                                 |
 
@@ -373,10 +380,10 @@ Settlement reports and order reports will NEVER match exactly. This is expected.
 Common reasons for gaps:
 
 - **Date shifting**: orders placed on Jan 31 may appear in the Feb settlement; Feb 28 orders may settle in March.
-- **MCF / Multi-Channel Fulfillment orders**: appear in settlements with fulfilment fees but with a zero `item_price` in the orders report.
+- **MCF / Multi-Channel Fulfillment orders**: identify them by `sales_channel` (a non-Amazon value instead of `Amazon.<tld>`), not by price alone. They appear in settlements with fulfilment fees and may carry a zero or null `item_price_value` in the orders report.
 - **B2B deferred orders**: business orders may be deferred for 30 days before settlement.
 - **Canceled orders**: appear in orders (`amazon_order_status` = `Canceled`) but not in settlements.
-- **Refunds**: processed as separate `REFUND` settlement entries, not linked back to the original order date.
+- **Refunds**: separate `REFUND` settlement entries posted on their own `date` (typically 1–5 weeks after the order), but they carry `amazon_order_id` and `order_date`, so they can be attributed to the original order and order month.
 
 The dashboard should help the user **build confidence** that the data is correct.
 
