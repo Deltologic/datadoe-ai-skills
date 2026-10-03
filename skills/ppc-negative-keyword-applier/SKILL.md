@@ -63,8 +63,14 @@ the top spenders.
   `ad_spend`, `ad_clicks`, `ad_orders`, `ad_campaign_type` (+ names / keyword / match type).
 - Write action: `AMAZON_ADS_TARGETS_ADD` (negative keyword), gated behind a `dryRun`
   step. A negative keyword is `negative: true` + `targetType: "KEYWORD"` +
-  `targetDetails: { keyword, matchType }`, scoped to a `campaignId` + `adGroupId`; max
-  **250** targets per action.
+  `targetDetails: { keywordTarget: { keyword, matchType } }`, scoped to a `campaignId` +
+  `adGroupId`; max **25** targets per action (schema `maxItems: 25`) - batch longer lists
+  into several actions.
+- Dedupe source: `Negative Keywords` - `amazon_ads_negative_keywords` (source id
+  `36596ff85e`): `ad_campaign_id`, `ad_group_id`, `ad_keyword_text`, `ad_match_type`,
+  `ad_keyword_state`. Weekly snapshot (`date` = Monday), `requiresDatePeriod: true`. Its
+  `ad_match_type` is Amazon's reporting name (`NEGATIVE_EXACT` / `NEGATIVE_PHRASE`) - that
+  is read-side naming only; the ADD payload still uses `EXACT` / `PHRASE` + `negative: true`.
 - **Match type is `EXACT` / `PHRASE` / `BROAD`** - never `NEGATIVE_EXACT` /
   `NEGATIVE_PHRASE`. The negativity is carried by the separate `negative: true` flag, not
   by the match-type value; the live backend rejects `NEGATIVE_*` match types.
@@ -90,18 +96,29 @@ the top spenders.
 4. Poll, download, aggregate by `ad_search_term` (+ campaign/ad group). Apply the
    wasteful rule above. Produce the candidate list with spend, clicks, orders,
    and the target campaign/ad group ids.
+5. **Dedupe against existing negatives.** `exports_create` for
+   `amazon_ads_negative_keywords` with `from` = 14 days ago, `to` = today (it needs a
+   date period; keep only rows from the latest `date`), filter
+   `ad_campaign_type = SPONSORED_PRODUCTS` and `ad_keyword_state = ENABLED`, columns
+   `ad_campaign_id`, `ad_group_id`, `ad_keyword_text`, `ad_match_type`. Drop every
+   candidate whose lower-cased term already exists for the same `ad_campaign_id` +
+   `ad_group_id` (match on `ad_campaign_id` + term alone when `ad_group_id` is null -
+   it is null for Sponsored Products rows before 2026-07-01). Report the skipped count
+   as "already negated". The snapshot is weekly, so a negative added in the last few
+   days can still slip through; if the live ADD then reports a duplicate for that term,
+   treat it as a no-op, not a failure.
 
 ### Phase 2 - Confirm
-5. Show the ranked candidate list (most wasted spend first, ASIN-target terms excluded /
+6. Show the ranked candidate list (most wasted spend first, ASIN-target terms excluded /
    flagged) and the total spend it would stop. Ask the user which to negate and at what
    match type - `EXACT` is safest (negates only that exact term); `PHRASE` is broader.
    The term is negated by `negative: true`; the match type is just `EXACT` / `PHRASE` /
    `BROAD`. Do not proceed without a selection.
 
 ### Phase 3 - Apply (dryRun, then real)
-6. `actions_details_schema_get` for `AMAZON_ADS_TARGETS_ADD` and read the exact
+7. `actions_details_schema_get` for `AMAZON_ADS_TARGETS_ADD` and read the exact
    `targetDetails` shape before building the payload.
-7. Build one `targets[]` entry per approved term:
+8. Build one `targets[]` entry per approved term:
    ```json
    {
      "campaignId": "<ad_campaign_id>",
@@ -110,18 +127,20 @@ the top spenders.
      "state": "ENABLED",
      "negative": true,
      "targetType": "KEYWORD",
-     "targetDetails": { "keyword": "<ad_search_term>", "matchType": "EXACT" }
+     "targetDetails": { "keywordTarget": { "keyword": "<ad_search_term>", "matchType": "EXACT" } }
    }
    ```
    `matchType` must be `EXACT` / `PHRASE` / `BROAD` (never `NEGATIVE_*`); the negativity
-   is the `negative: true` flag. Max 250 targets per action. Do NOT add `marketplaceScope`
+   is the `negative: true` flag. `keywordTarget` is the schema's wrapper key; a flat
+   `targetDetails: { keyword, matchType }` also validates when `targetType` is set. Max
+   25 targets per action - split longer lists. Do NOT add `marketplaceScope`
    / `marketplaces` - `AMAZON_ADS_TARGETS_ADD` on Sponsored Products rejects them
    ("does not support marketplaceScope/marketplaces for SPONSORED_PRODUCTS"); the
    `campaignId` / `adGroupId` already scope the negative to the right marketplace.
-8. `actions_start type="AMAZON_ADS_TARGETS_ADD"` with **`dryRun: true`**. This validates
+9. `actions_start type="AMAZON_ADS_TARGETS_ADD"` with **`dryRun: true`**. This validates
    the whole batch without touching Amazon (works even if the Action type is disabled) -
    confirm `status: VALIDATED, valid: true, actionId: null`.
-9. Show the validated result and the before/after list. Only if the user explicitly
+10. Show the validated result and the before/after list. Only if the user explicitly
    approves, call `actions_start` again with `dryRun: false`, poll `actions_get` until it
    completes, and report per-term acceptance. Otherwise stop - nothing changed.
 
@@ -130,12 +149,13 @@ the top spenders.
 ```
 Negative-keyword candidates - {marketplace} - last {N} days
 Total wasted spend if applied: {currency}{sum}
+Already negated (skipped): {m} terms
 
 #  Search term            Spend    Clicks  Orders  Campaign / Ad group      Match
 1  {term}                 {cur}{v} {n}     0       {campaign} / {group}     EXACT (neg)
 ...
 
-Dry run: {k} targets validated, 0 errors.
+Dry run: {k} targets validated, 0 errors ({b} batches of <= 25).
 Reply "apply" to add these negatives for real, or edit the list first.
 ```
 
@@ -152,6 +172,9 @@ null`. On "apply", the negative is added and future spend on that term stops.
 - Did I exclude / flag ASIN-target terms (`b0...`) so I don't kill competitor targeting?
 - Did I use `matchType: EXACT` / `PHRASE` / `BROAD` + `negative: true` (never `NEGATIVE_*`)?
 - Did I keep each negative in its own campaign/ad group (ids from the data)?
+- Did I drop terms already present in `amazon_ads_negative_keywords` for that
+  campaign/ad group, and report how many I skipped?
+- Did I split the batch so no action carries more than 25 targets?
 - Did I run `dryRun`, confirm `VALIDATED` / `actionId: null`, and show it before any real write?
 - Did I get explicit approval before `dryRun: false`?
 - Is the marketplace / currency right for the output display (it is NOT passed in the
@@ -168,9 +191,13 @@ null`. On "apply", the negative is added and future spend on that term stops.
   accepts `EXACT` / `PHRASE` / `BROAD`; negativity is the separate `negative: true` flag.
 - Negating ASIN-target terms (`b0...` strings) - that's deliberate competitor targeting,
   not a junk query.
-- Trusting the JSON schema alone - always dryRun against the live backend; the schema
-  accepted `NEGATIVE_*` match types and `marketplaceScope` / `marketplaces` that the
-  backend rejects for `AMAZON_ADS_TARGETS_ADD` on Sponsored Products.
+- Re-adding a negative that already exists - check `amazon_ads_negative_keywords` first;
+  duplicates waste the 25-target budget and confuse the before/after report.
+- Trusting the JSON schema alone - always dryRun against the live backend. The schema
+  still lists `marketplaceScope` / `marketplaces`, but the backend rejects them for
+  `AMAZON_ADS_TARGETS_ADD` on Sponsored Products (verified by dryRun 2026-10-03:
+  `EXACT` + `negative: true` -> `VALIDATED`; `NEGATIVE_EXACT` -> "Invalid option";
+  `marketplaceScope` -> "does not support marketplaceScope for SPONSORED_PRODUCTS").
 
 ## Notes
 
