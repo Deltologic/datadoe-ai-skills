@@ -33,8 +33,8 @@ sales-only snapshot use the **Weekly Sales Briefing** instead. Live from DataDoe
 
 1. **Get the period right first (or every number below is a lag artifact).** Lag varies
    by account and by source: the profit tables are INTRADAY (refreshed ~10am / 1pm / 4pm)
-   with ~1 day of lag observed on sales, while their traffic columns can trail by up to
-   3 days (and older sources lagged 6+ days with mid-series gaps). Never assume "this week = the last 7 calendar
+   with ~1 day of lag observed on sales, while their traffic columns trail by one to two weeks (8 days with a 4-day hole
+   measured; Amazon's own note says up to 3) and older sources lagged 6+ days with mid-series gaps. Never assume "this week = the last 7 calendar
    days" or a fixed lag - detect the **last complete day dynamically** (see workflow),
    anchor both week windows to it, and count each week's **effective (complete) days**.
    If a week is missing days, normalize by effective days or mark it **provisional** -
@@ -78,8 +78,9 @@ sales-only snapshot use the **Weekly Sales Briefing** instead. Live from DataDoe
     Two rules: (1) on the per-SKU table these three columns are **per child ASIN and
     repeated on every SKU row** of that ASIN - take `max()` per `child_asin`, never
     `sum()` (summing double-counts every multi-SKU ASIN); (2) the traffic columns may be
-    **delayed up to 3 days and revised for 30 days**, while sales lag ~1 day - so a
-    conversion rate (units / sessions) for the newest 2-3 days is provisional, and a
+    **delayed by days to weeks (8 days measured) and revised for 30 days**, while sales lag
+    ~1 day - so a conversion rate (units / sessions) for the days after the last
+    traffic-complete day is provisional, and a
     week's sessions can still move after the review is written.
 - **Daily data lag - detect it, don't assume it.** The profit tables are INTRADAY
   (`exports_source_get` reports refreshes at ~10am / 1pm / 4pm) and lag about 1 day on
@@ -92,7 +93,7 @@ sales-only snapshot use the **Weekly Sales Briefing** instead. Live from DataDoe
   row-count test falsely marks a settlement-incomplete day as complete - **and check fee
   completeness separately** (fees post after sales; see step 3). If the review reads the
   traffic columns, treat them as a third completeness tier: a day can be sales- and
-  fee-complete while `total_sessions` is still zero or partial for up to 3 days - detect
+  fee-complete while `total_sessions` is still zero or partial for a week or more - detect
   the last traffic-complete day from the daily `total_sessions` the same way, and label
   any conversion / buy-box figure that includes later days provisional.
 - **Weekly buckets are built in code, not with `dateInterval WEEK`.** `dateInterval WEEK`
@@ -165,8 +166,8 @@ sales-only snapshot use the **Weekly Sales Briefing** instead. Live from DataDoe
    anchored in step 3) - `groupBy [sku, product_name]`, sum `profit`, `total_sales`,
    `total_units_sold` with distinct aliases (`profit_sum`, `sales_sum`, `units_sum` -
    `as profit` errors `ALIAS_COLLISION`), format CSV with `limit 5000` (JSON caps at 1,000
-   rows, CSV at 5,000; page with `skip` if the account has more SKUs than that). Diff by
-   SKU in code -> top gainers/droppers by Δ profit, and say how many SKUs appear in only
+   rows, CSV at 5,000; page with `skip` if the account has more SKUs than that). Drop rows whose `sku` is null (account-only
+   ad rows) and diff by SKU in code -> top gainers/droppers by Δ profit, and say how many SKUs appear in only
    one week. Do NOT pull a top-N by profit per week (e.g. `limit ~200 DESC`): on a
    ~3,000-SKU account only 97 of 200 SKUs overlapped between the two weeks, and any SKU
    that went from positive to negative - the dropper a reviewer most wants - falls out of
@@ -195,7 +196,7 @@ Trend (8wk): sales ▁▃▆▅▆▇  profit ▆▇▃▁▄▆
 
 Why (if anomaly): margin {m}% vs normal {b}% - driver: {fees/COGS/ads} moved
   from {x}% to {y}% of sales in wk {date}.
-  Cost mix (% of sales): VAT {v}%  fees {f}% (FBA {fb}%, referral {r}%)  COGS {c}%  ads {a}%  -> margin {m}%
+  Cost mix (% of sales): VAT {v}%  fees {f}% (FBA {fb}%, referral {r}%)  COGS {c}%  ads {a}%  refunds {rc}%  -> margin {m}%
   Margin provisional if {date} is fee-incomplete (fees {x}% of sales vs ~{y}% trailing).
 
 Top movers   +{sku} {cur}..   -{sku} {cur}..
@@ -239,7 +240,7 @@ difference between a scary wrong number and a correct insight.
 ## Common mistakes
 
 - Assuming "this week = the last 7 calendar days" or a fixed lag - lag differs per source
-  and per column (~1 day on the intraday profit tables' sales, up to 3 days on their
+  and per column (~1 day on the intraday profit tables' sales, one to two weeks on their
   traffic columns, 6+ days with gaps on older sources); detect the last complete day and
   anchor to it.
 - Summing `total_sessions` / `total_page_views` / `avg_buybox_percentage` across the SKU

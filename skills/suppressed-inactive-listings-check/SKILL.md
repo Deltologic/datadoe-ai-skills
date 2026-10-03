@@ -184,11 +184,17 @@ risk".
    `listing_name` / `listing_price_value`, and item name / main image from `summaries`.
    Pull recent sales: `exports_create` on `amazon_profit_by_sku_and_date`, `from`/`to` =
    the last 30 days, `groupBy [sku, child_asin]`, `sum(total_sales)`, `sum(total_units_sold)`,
-   `filters: sku in (...)` for the flagged SKUs (CSV; paginate with `skip` above 5,000
-   rows; one row per SKU, so no traffic columns and nothing to de-duplicate). Each flagged
+   `filters: sku in (...)` for the flagged SKUs **plus the "inactive, no issue" and
+   "inactive with stock" SKUs** (so an out-of-stock hero surfaces with its sales - one
+   tested account had an inactive SKU with GBP 2,805 / 566 units in 30 days and no issue)
+   (CSV; paginate with `skip` above 5,000 rows). Two data facts: a `sku` can return **two
+   rows**, one with `child_asin` null (account-only ad rows) - sum per `sku` in code; and a
+   SKU with no sales has **no row at all**, so a missing row means 0, never "unknown". Each
    SKU's own 30-day sales are its revenue at risk; a flagged SKU with 0 sales whose sibling
-   SKU on the same `child_asin` is BUYABLE gets "covered by sibling SKU <sku>". Sort by
-   revenue at risk (then units on hand x price for stranded, then severity).
+   SKU on the same `child_asin` is live gets "covered by sibling SKU <sku>" - judge the
+   sibling by `amazon_listings_with_cogs.listing_status = Active` from step 3 (its
+   `summaries.status` is not in the step-4 pull unless you add the siblings to `sku in
+   (...)`). Sort by revenue at risk (then units on hand x price for stranded, then severity).
 7. **Report** the prioritized list with the failing gate, the exact issue text
    (`code` + `message`), the snapshot age from `last_seen_at`, and the concrete fix.
    Group by severity; call out the single biggest exposure; give the "inactive, no
@@ -209,7 +215,10 @@ ERRORS / SUPPRESSED (fix first)
   {sku}            attr-suppressed invalid main image (INVALID_IMAGE)  add compliant main image     covered by sibling SKU {sku2}
 
 BUYABLE BUT FLAGGED (verify - enforcement or ERROR on a live offer)
-  {sku}            buyable         {issue (code)}                      verify / fix                 -
+  {sku}            buyable         {issue (code)}                      verify / fix                 {cur}{v}/mo (own sales; can be the largest exposure)
+
+INACTIVE, NO ISSUE, WITH RECENT SALES (out of stock, not suppressed - restock)
+  {sku}            inactive        no issue, 0 stock                   restock                      {cur}{v}/mo
 
 STRANDED INVENTORY (stock that can't sell)
   {sku}            {units} units on hand, {stranded_reason} -> {primary_action}   {cur}{units x price}

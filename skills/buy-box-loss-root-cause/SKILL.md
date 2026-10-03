@@ -86,7 +86,7 @@ Report the first gate that fails, biggest-revenue SKU first.
     large catalog, so filter to the flagged ASINs (`child_asin in (...)`) and paginate with
     `skip` if needed.
     Premium note (applies to all three premium tables above): a premium export costs 5 AI Tokens instead of 2 - nothing else differs, and the tables are part of the always-on default dataset, so they are never disabled. A 0-row export means no data in the window or an initial load still in progress - say which, and for price fall back to `amazon_fba_stranded_inventory.your_price` or `amazon_listings_with_cogs.listing_price_value` (with `fba_quantity_available` for stock); never render zeros.
-    Also treat `your_price = 0` as missing (it is 0 on about half the rows), not as a price.
+    Also treat `your_price = 0` as missing (it is 0 on half to two thirds of the rows), not as a price.
   - `amazon_item_offers` exists as a future per-seller Buy Box source (per-offer
     `IsBuyBoxWinner`, `SellerId`, offer prices); this skill does not build on it yet.
 - Currency/marketplace: localise (e.g. a German marketplace = EUR; the data uses the
@@ -108,29 +108,38 @@ Report the first gate that fails, biggest-revenue SKU first.
      `groupBy [date, currency]`, `sum(total_units_sold)`, `sum(total_sales)`,
      `max(total_sessions)` (~45 rows per currency). **Anchor day** = the last day of the
      longest recent contiguous run of days whose `total_sessions` is at/above the
-     completeness threshold (>= 80% of the trailing median of the prior 7 present days).
-     Judge completeness on the **traffic** column: sales are ~1 day behind but traffic can
-     lag up to 3 days, so the newest days routinely show complete units and sales with thin
-     or zero sessions - those days are not complete for buy box. Contiguous means the
-     previous calendar day is present - an isolated day after a multi-day hole is **not**
+     completeness threshold (>= 80% of the trailing median of the prior 7 complete days).
+     Judge completeness on the **traffic** column: sales are ~1 day behind but traffic lags
+     by one to two weeks on real accounts (13 days measured; Amazon's own note says up to 3),
+     so the newest days routinely show complete units and sales with **rows present but
+     `total_sessions` = 0** - a row existing is not completeness; the sessions value is.
+     Those days are not complete for buy box. Contiguous means the previous calendar day is
+     also complete - an isolated day after a multi-day hole is **not**
      the anchor even if its totals look complete (one re-test: 09-25 sat alone after a
      4-day gap; the right anchor was 09-20). `MAX(date)` alone is never safe. Name the
-     anchor, the traffic lag in days from today, and any gap; the ~3 newest days are
-     provisional either way.
+     anchor, the traffic lag in days from today, and any gap; every day after the anchor is
+     provisional.
    - **(b) Anchor day per ASIN:** `from = to = anchor day`, `groupBy [child_asin,
      product_name]`, `max(avg_buybox_percentage)` -> **bb_now**, `max(total_page_views)` ->
      anchor-day page views, `sum(total_sales)`, `sum(total_units_sold)` (one row per ASIN;
      `max` collapses the per-ASIN traffic values repeated on the ASIN's SKU rows).
    - **(c) 30-day sales per ASIN (ranking input):** `groupBy [child_asin, product_name]`,
      `sum(total_sales)`, `sum(total_units_sold)` (one row per ASIN). Keep ASINs with
-     `total_units_sold > 0` over the window. No traffic columns in this shape - a `max`
-     over 30 days returns the busiest day, and a `sum` double-counts SKU rows.
-   - **Flag** an ASIN as a *current* buy-box loss only if **bb_now** is low AND it clears
-     the traffic floor (anchor-day `total_page_views` >= 20, or 7-day `total_page_views`
-     >= 50 from (d)) - not if only its 30-day average is low (a 30-day mean flags ASINs
+     `total_units_sold > 0` over the window - this is a **flag precondition, not just a
+     ranking input**: the profit table also carries traffic-only ASIN-days (rows with a null
+     `sku`, e.g. variation parents with page views and no offer), and without this filter 3
+     of the 4 ASINs that cleared the traffic floor in testing were parents showing a fake
+     100% loss. No traffic columns in this shape - a `max` over 30 days returns the busiest
+     day, and a `sum` double-counts SKU rows.
+   - **Flag** an ASIN as a *current* buy-box loss only if it sold in the window (step c),
+     has a non-null `sku` row on the anchor day, **bb_now** is low AND it clears the traffic
+     floor (anchor-day `total_page_views` >= 20, or 7-day `total_page_views` >= 50 from (d))
+     - not if only its 30-day average is low (a 30-day mean flags ASINs
      that dipped and have since recovered). An ASIN with **no row on the anchor day** is
      "no data that day", not 0%: use its own latest day within the last 7 complete days and
-     mark the date; if none, report "no recent buy-box read".
+     mark the date; if none, report "no recent buy-box read". Report the count of selling
+     ASINs without an anchor-day row and their 30-day sales as a single line (observed:
+     495 ASINs, GBP 9.3k) - they are not losses, they are unmeasured.
    - **(d) 7-day trend for the flagged ASINs (mandatory):** the 7 complete days ending on
      the anchor, `groupBy [date, child_asin]`, `filters: child_asin in (...)` limited to the
      flagged ASINs, `max(avg_buybox_percentage)` + `max(total_page_views)` per ASIN-day
@@ -154,9 +163,10 @@ Report the first gate that fails, biggest-revenue SKU first.
    each SKU's own 30-day sales next to its price row.
    - Price: for each SKU with `your_price > 0` (0 means missing, not free), gap =
      `your_price - featuredoffer_price`.
-     Report the SKU that is actually in stock (`available` > 0). If several are in stock,
-     show each SKU's gap. A gap above 0 means priced out.
-   - Stock: only when every SKU for that ASIN has `available` = 0.
+     Report the SKU that is actually in stock (`available` > 0; a null `available` is
+     unknown, not 0). If several are in stock, show each SKU's gap. A gap above 0 means
+     priced out.
+   - Stock: only when every SKU for that ASIN has `available` = 0 (nulls excluded).
    - Otherwise: fulfilment/health check.
 6. Rank by sales at risk (30d sales x (1 - bb/100)) and render.
 

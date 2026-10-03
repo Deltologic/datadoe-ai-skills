@@ -46,8 +46,10 @@ returns half the time. Live from DataDoe, read-only. No spreadsheets.
    window - if a SKU's returns exceed its in-window units sold (rate > 100%) the rate is
    a lag artifact, not a real >100% return rate. Do NOT report it as a percentage; mark
    it "lag-inflated" and rank it by cost / return count instead.
-2. **Return cost** per SKU = refunded sales (`refund_cost`) + return handling/label cost
-   + the item cost of the units that came back (`return_cogs`, less whatever is resold).
+2. **Return cost** per SKU = the signed `refund_cost` flipped to a positive cost + return
+   handling/label cost. `refund_cost` already includes the return-COGS adjustment (the
+   scheme: "Return COGS is added on the return date"), so do NOT add `return_cogs` on top -
+   show it as information only.
    **Rank by cost, not rate** - that is where the money actually is.
 3. **Reason - bucket it, don't read raw enums.** `amazon_return_reason` carries ~30
    values (more than it looks), and FBM prefixes them - so **read the actual reason
@@ -103,7 +105,7 @@ moves it - and separately note how much of the volume is unfixable noise.
     denominator), `return_units` (returned units on return receipt/request date - the
     same basis as `amazon_returns`), `refund_cost` (signed: refund outflows negative,
     fee reversals positive, on posting date), `return_cogs` (item cost of the returned
-    units; not part of `profit`), `cogs_total` / `cogs_item`, `total_sales`, `currency`.
+    units; informational - already folded into `refund_cost`; not part of `profit`), `cogs_total` / `cogs_item`, `total_sales`, `currency`.
     **Premium export** (5 AI Tokens instead of 2 - nothing else differs); part of the
     always-on default dataset, so it is never disabled. `requiresDatePeriod: true` -
     `exports_create` must send top-level `from` / `to`. Refreshed intraday, sales lag
@@ -122,6 +124,11 @@ moves it - and separately note how much of the volume is unfixable noise.
   weeks, so a too-short window understates the true rate. Pull returns and the profit
   table over the **same** `from` / `to` - a denominator from a different window makes
   the rate meaningless.
+- **Returns-side completeness:** `return_units` (and `amazon_returns` rows) lag the
+  sales-complete day by about a week (measured: latest return 6 days before the last
+  sales-complete day, daily `return_units` = 0 after it). End the rate window on the last
+  day with `return_units > 0` that is followed only by zero days, otherwise the rate reads
+  ~10% low; say which day you used.
 - **Completeness check (~1-day lag).** The profit table is intraday but sales lag about
   a day: the newest date is a partial day. Detect the last complete day from the daily
   `total_units_sold` (walk back from the tail until a day is at/above ~60% of the median
@@ -143,15 +150,18 @@ moves it - and separately note how much of the volume is unfixable noise.
 4. **Units sold, rate + money:** `exports_create` on `amazon_profit_by_sku_and_date`
    for the **same** `from` / `to` as step 3 (top-level dates are required),
    `groupBy [child_asin, sku, currency]`, `sum total_units_sold`, `sum return_units`,
-   `sum refund_cost`, `sum return_cogs`, `sum total_sales` (distinct aliases). Also
-   roll up per `child_asin` for the ASIN view. Return rate per SKU =
+   `sum refund_cost`, `sum return_cogs`, `sum total_sales` (distinct aliases), CSV
+   `limit 5000` and page with `skip` (a 60-day pull grouped by SKU and ASIN exceeded 5,000
+   groups - 5,709 - on a ~3,000-SKU account). Also roll up per `child_asin` for the ASIN view. Return rate per SKU =
    `return_units` / `total_units_sold`; compute the catalog median from it. The
    denominator must come from this table - it is the shipped-units count the profit
    reconciles to; a sales/traffic-style source under-counts units and inflates rates.
 5. **Cost** per SKU: `refund_cost` (flip the sign for display - outflows are negative)
-   + return handling/label cost (FBM: `amazon_return_label_cost`) + `return_cogs` for
-   the units that came back and were not resold (state the resale assumption; use
-   settlements if pulled for exactness). For **FBA** returns there is no per-return
+   + return handling/label cost (FBM: `amazon_return_label_cost`). Do **not** add
+   `return_cogs`: `refund_cost` already carries the return-COGS adjustment by disposition
+   (positive `refund_cost` rows exist - returns of sellable units with no refund), so
+   adding it double-counts (observed: top SKU GBP 905 vs ~158 net). Show `return_cogs` as
+   context only; use settlements if pulled for exactness. For **FBA** returns there is no per-return
    money in `amazon_returns` - the FBA money comes from the profit table's
    `refund_cost` / `return_cogs` (or settlements), never from the returns table.
 6. **Rank by cost**, attach the dominant reason + channel + trend, and map each to its
@@ -168,7 +178,7 @@ SKU / ASIN         units  ret%    returns  cost        top bucket (share)      -
 {sku}              {u}    {r}%    {n}      {cur}{c}    Sizing (44%)            add size chart
 
 *lag = returns exceed in-window units sold (return-lag artifact); ranked by cost, not rate.
-units = total_units_sold, ret% = return_units / units, cost = refund_cost + label cost + return_cogs (Profit by SKU & Date)
+units = total_units_sold, ret% = return_units / units, cost = -refund_cost + label cost (Profit by SKU & Date; return_cogs shown as context)
 
 Catalog return rate: {median}%   ·   Total refund cost in window: {cur}{sum}  (return_cogs: {cur}{c})
 Actionable vs non-actionable: {a}% actionable (product/listing/sizing) · {x}% non-actionable (delivery + noise)   [unclassified: {u}]
@@ -225,7 +235,7 @@ short, money-ranked list where each line already says what to do.
 - Mismatched windows - returns over 60 days against units over 49 - or a denominator
   that includes the newest partial day.
 - Reading `refund_cost` as a positive number - it is signed (outflows negative); flip it
-  for display and do not net it against `return_cogs`.
+  for display; it already includes the return-COGS adjustment, so never add `return_cogs` to it.
 - Summing refund amounts across marketplaces/currencies into one number.
 
 ## Notes

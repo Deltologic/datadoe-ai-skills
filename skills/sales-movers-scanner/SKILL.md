@@ -49,7 +49,7 @@ recent window to the prior equal window, then for each big mover decompose:
      `amazon_profit_by_sku_and_date`. Down/up means a visibility, rank, ads, suppression,
      or seasonality change. Sales followed the traffic.
    - **Conversion** - there is **no conversion-rate column** on this table; compute it as
-     `total_units_sold / total_sessions` (unit session rate) or `total_orders /
+     `total_units_sold / total_sessions` (unit session rate; n/a when sessions are 0 - a few ASINs sell with no recorded sessions) or `total_orders /
      total_sessions` (order rate) per ASIN per window, after aggregating per the
      per-ASIN rule in Configuration. Conversion down/up while traffic held ->
      listing/price/reviews/offer problem or win.
@@ -69,8 +69,8 @@ recent window to the prior equal window, then for each big mover decompose:
    hero SKU vs an across-the-board seasonal dip are very different stories.
 
 **Data-completeness guard (check BOTH windows before you trust any broad move).** Sales
-run ~1 day behind (shipped-order sales, refreshed intraday), traffic runs up to 3 days
-behind and is revised for up to 30, and both can have mid-window holes, so *either*
+run ~1 day behind (shipped-order sales, refreshed intraday), traffic runs **days to weeks**
+behind (8-13 days measured on a UK account) and is revised for up to 30, and both can have mid-window holes, so *either*
 window can be under-counted - a lagging recent window fakes a collapse, and an
 under-counted prior window fakes a boom (every SKU reads as a riser). Guard both:
 - **Normalize by effective days, not calendar days present.** A window's **effective
@@ -81,8 +81,9 @@ under-counted prior window fakes a boom (every SKU reads as a riser). Guard both
   state that a window looks under-reported; do NOT report the move as real.
 - **Traffic completes later than sales.** `total_sessions`, `total_page_views` and
   `avg_buybox_percentage` come from Amazon's Sales and Traffic report and may be delayed
-  by up to 3 days (and revised for up to 30), while sales are ~1 day behind. Judge traffic
-  completeness separately from sales (step 3): the newest ~3 days are
+  by days to weeks (Amazon says up to 3 days; measured 8-13 days behind on a UK account,
+  with holes) and revised for up to 30, while sales are ~1 day behind. Judge traffic
+  completeness separately from sales (step 3): the days after the last traffic-complete day are
   **traffic-provisional even when their sales are complete**, and a traffic-driven
   "decline" confined to those days is the lag, not a move. Say so in the output whenever
   the recent window includes them.
@@ -118,7 +119,7 @@ under-counted prior window fakes a boom (every SKU reads as a riser). Guard both
     tax (`sales_tax` holds the tax part if an ex-VAT view is wanted).
 - Windows: compare a recent window to the prior equal window (e.g. last 7 days vs the 7
   before). **Sales run ~1 day behind** (the newest day is still filling as orders ship),
-  **traffic up to 3 days**, and holes happen - never assume a fixed offset. Detect the
+  **traffic days to weeks** (8-13 measured), and holes happen - never assume a fixed offset. Detect the
   last complete day dynamically (see workflow step 3) - it is the **end of the latest
   contiguous run of complete days**, not an isolated complete day sitting after a hole -
   and end both windows there, so you compare two equally-complete windows, not a full
@@ -135,7 +136,7 @@ under-counted prior window fakes a boom (every SKU reads as a riser). Guard both
    confirming each hit on `tableName`. Both are in the always-on default dataset, so
    there is no deprecation warning to carry into the output header.
 3. **Calibrate completeness first - don't assume a lag.** `exports_create` once on
-   `amazon_profit_by_date` over a wide span (~30 days) with `groupBy: ["date",
+   `amazon_profit_by_date` over a wide span (~45 days - the traffic lag alone can eat two weeks) with `groupBy: ["date",
    "currency"]` (rows are per date *and* currency) and aggregations `sum(total_sales)` as
    `sales`, `sum(total_units_sold)` as `units` and `max(total_sessions)` as `sessions`
    (account-level rows are already one per date and currency, so `max` just carries the
@@ -149,11 +150,11 @@ under-counted prior window fakes a boom (every SKU reads as a riser). Guard both
    - **Sales-complete day** = a `date` whose `sales` *and* `units` are at or above their
      threshold. Expect the newest day (sometimes two) to miss it - that is the normal
      ~1-day shipped-sales lag, not an outage; a day under the threshold inside the span is
-     a hole. Optional cross-check: add `sum(unshipped_sales)` - a day where it is a large
-     share of `total_sales` is still filling.
+     a hole. **Mandatory cross-check:** add `sum(unshipped_sales)`; a day where it exceeds ~10% of `total_sales + unshipped_sales` is still filling and is NOT complete even if it passes the 60% test (observed: a day at 74% of median sales with 18.5% unshipped flipped the week-over-week sign).
    - **Traffic-complete day** = a `date` whose `sessions` are at or above their
-     threshold - judged **separately**, because traffic can lag up to 3 days and be
-     revised for up to 30. Expect a traffic tail of ~3 days behind the sales tail.
+     threshold - judged **separately**, because traffic lags far more than sales (8-13
+     days measured, holes happen) and is revised for up to 30. Expect the traffic tail to
+     sit one to two weeks behind the sales tail; measure it, never assume it.
    - **Last complete day (window end)** = the latest date D such that D and the 6 days
      before it are all sales-complete - i.e. the end of the latest contiguous complete
      run. An isolated complete day after a hole is **not** an anchor (e.g. complete
@@ -179,12 +180,15 @@ under-counted prior window fakes a boom (every SKU reads as a riser). Guard both
    rather than the ASIN alone is what keeps that dedupe exact before you add across days.
    **Row budget:** 7 days x ~1,600 ASINs is ~11k rows per window, over the 5,000-row CSV
    cap, so one export per window is **not** enough. Split each window by date into
-   **2-day chunks** (4 exports per window - 2+2+2+1 days - at ~3,200 rows each, 8 exports
-   in total; fire them concurrently and poll together). If any chunk returns `rowCount`
-   equal to the limit, page it with `skip: 5000` on the same query (same `orderByColumn`)
-   or split it to single days, and never treat a chunk that hit the cap as complete.
+   **2-day chunks** (4 exports per window - 2+2+2+1 days; measured ~4,300 rows each on a
+   ~2,150-row/day account, 86% of the cap; 8 exports in total, fired concurrently and
+   polled together). If a chunk returns more than ~4,500 rows or `rowCount` equal to the
+   limit, switch that window to **single-day chunks** (~2,150 rows each) or page with
+   `skip: 5000` on the same query (same `orderByColumn`), and never treat a chunk that hit
+   the cap as complete.
    Then **aggregate per ASIN per window in code**: sum `total_sales`, `total_units_sold`,
-   `total_orders`, `total_sessions` and `total_page_views` across the window's days;
+   `total_sessions` and `total_page_views` across the window's days (`total_orders` counts a
+   multi-ASIN order once per ASIN, so never present its sum as the account order count);
    average `avg_buybox_percentage` across the days (weight by `total_page_views` if you
    want the page-view-weighted share); conversion = units / sessions; price = sales /
    units. Also count distinct `child_asin` per `date` from these rows - that is the day
@@ -211,7 +215,7 @@ under-counted prior window fakes a boom (every SKU reads as a riser). Guard both
 ```
 Sales Movers - {marketplace} - {recent window} vs {prior window}   (ends {last complete day}; both windows complete)
 {if shifted: "Windows shifted back to end {date} - data after it is incomplete (lag {n} days)."}
-{if the recent window includes days after the traffic window end: "Sessions / conversion / buy-box for {dates} are provisional - Amazon traffic data lags up to 3 days and may be revised."}
+{if the recent window includes days after the traffic window end: "Sessions / conversion / buy-box for {dates} are provisional - Amazon traffic data lags sales by {n} days here and may be revised."}
 Net catalog change: {cur}{delta} ({pct}%)   ·   concentrated in {k} SKUs / broad
 
 TOP DECLINERS (by money lost)
@@ -248,8 +252,9 @@ SKU's delta.
   effective days before trusting the delta - shifting both back and reporting it if not?
 - Did I take `max()`, not `sum()`, for sessions / page views / buy box when grouping SKU
   rows to the ASIN, and compute conversion as units / sessions (there is no rate column)?
-- Did I judge traffic completeness separately from sales and mark the newest ~3 days of
-  sessions / conversion / buy-box provisional when a window includes them?
+- Did I judge traffic completeness separately from sales (measuring the lag, not assuming
+  3 days) and mark sessions / conversion / buy-box after the last traffic-complete day
+  provisional when a window includes them?
 - Did I say whether the move is concentrated or broad (one SKU vs seasonality)?
 - Did I keep each marketplace in its own currency?
 
@@ -273,8 +278,9 @@ SKU's delta.
 - Summing `total_sessions` / `total_page_views` / `avg_buybox_percentage` across the SKU
   rows of one ASIN - they repeat per SKU, so multi-SKU ASINs double-count; group by
   `[date, child_asin]` and take `max()`.
-- Reading a sessions drop on the newest ~3 days as a traffic move - that is the Amazon
-  traffic-report lag; sales complete ~1 day behind, traffic up to 3.
+- Reading a sessions drop on the days after the traffic-complete tail as a traffic move -
+  that is the Amazon traffic-report lag; sales complete ~1 day behind, traffic one to two
+  weeks (8-13 days measured).
 - Calling a buy-box/conversion rise from ~0 an organic win when it's back-in-stock, or
   reporting a >100% conversion rate literally (units-per-session quirk).
 

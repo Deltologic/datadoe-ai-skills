@@ -89,11 +89,12 @@ First a **calibration pull** to find the real data days, then **three window exp
      their median over the span (relative, per account - never a fixed amount). Sales are
      shipped-order sales that run ~1 day behind, so expect the newest day (sometimes two)
      to fall under the threshold - that is the normal lag, not an outage. A day under the
-     threshold inside the span is a gap. Optional cross-check: add `sum(unshipped_sales)`;
-     a day where it is a large share of `total_sales` is still filling.
+     threshold inside the span is a gap. **Mandatory cross-check:** add `sum(unshipped_sales)`; a day where it exceeds ~10% of `total_sales + unshipped_sales` is still filling and is NOT complete even if it passes the 60% test (observed: a day at 74% of median sales with 18.5% unshipped flipped the week-over-week sign).
    - **Traffic-present day**: judged **separately** - `total_sessions` at or above ~60% of
-     its median. Traffic can lag up to 3 days, so the newest ~3 days are
-     **traffic-provisional even when their sales are complete**. This briefing is
+     its median. Traffic lags far more than sales (Amazon says up to 3 days; measured 11-13
+     days behind on a UK account, with holes), so the traffic-present tail is whatever this
+     detection finds, and the days after it are **traffic-provisional even when their sales
+     are complete**. This briefing is
      sales-only and anchors on sales presence; if you show any traffic or rate metric,
      compute it from traffic-present days only and say so in the card.
    - The **last complete day** = the last day of the **longest recent contiguous run** of
@@ -218,9 +219,9 @@ Render a polished, self-contained HTML card. Requirements:
 - **Header**: "<seller name from `sellers_and_vendors_list`> — Weekly Sales Briefing", subtitle showing the anchored date range and completeness (e.g. "14–24 Jul 2026 · this week 5/7 days present — provisional")
 - **Footer**: "Data via DataDoe · Generated [today's date] · sales complete through
   [last complete day]". When a window is provisional, say how many days it reflects. If
-  the card shows any traffic or rate figure and its window includes days inside the newest
-  ~3-day traffic lag, add one line: "Sessions / page views for [dates] are provisional -
-  Amazon traffic data lags up to 3 days and may be revised." Do not print token costs.
+  the card shows any traffic or rate figure and its window includes days after the last
+  traffic-complete day, add one line: "Sessions / page views for [dates] are provisional -
+  Amazon traffic data lags sales by {n} days here and may be revised." Do not print token costs.
 - No external dependencies (pure HTML/CSS/JS, inline everything)
 - Responsive — readable at typical desktop artifact width
 
