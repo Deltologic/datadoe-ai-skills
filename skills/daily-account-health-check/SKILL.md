@@ -65,13 +65,19 @@ A single red gate outranks five green ones. Report the worst gate first.
 
 - MCP base: `https://mcp.datadoe.com/mcp/v1`
 - Data source: `Seller Account Health Metrics` (`amazon_seller_performance` -
-  resolve the source id via `exports_sources_get`). Fetch cadence `RECURRING_DAILY`,
-  one row per marketplace per day; the latest `date` is the current state. Each metric
-  carries a triad: `*_value`, a target (`*_target_less_than` / `*_target_greater_than`),
-  and a `*_status` (GOOD/BAD-style enum) - the `*_status` is the authoritative signal.
-- **A `from`/`to` range is mandatory** - this source has no "latest day" shorthand, and a
-  single date (or no range) errors on the first call. Pass an explicit small range (e.g.
-  the last 7 days) and take `MAX(date)` from the result (see workflow).
+  resolve the source id via `exports_sources_get`). Fetch cadence `RECURRING_DAILY`, but
+  a row exists only for days on which a snapshot was fetched (observed: ~12 rows a month,
+  gaps of up to 4 days); the latest `date` is the current state. Each metric carries a
+  triad: `*_value`, a target (`*_target_less_than` / `*_target_greater_than`), and a
+  `*_status` (GOOD / FAIR / BAD-style enum) - the `*_status` is the authoritative signal.
+- **Rates are fractions.** Every `*_value` and `*_target_*` rate column is 0-1 (`0.01` =
+  1%, `0.97` = 97%). Multiply by 100 for display and keep value and target on the same
+  scale. `seller_account_health_rating_6m_score` is a 0-1000 score, not a rate.
+- **A `from`/`to` range is mandatory** - omitting it errors (`FILTER_VALIDATION`). A
+  single-day range is accepted but usually returns 0 rows because snapshots are not daily.
+  Pass the **last 14-30 days**, `orderByColumn: date DESC`, and take the first row. If
+  `rowCount = 0`, widen to 60 days before reporting - never read 0 rows as "healthy".
+  Always print the snapshot date and its age in days; flag it amber when older than 3 days.
 - Currency/marketplace: read `marketplace_country_code`; localise language and
   currency to it.
 
@@ -83,8 +89,8 @@ A single red gate outranks five green ones. Report the worst gate first.
    source `amazon_seller_performance` is `enabled` for this org. If disabled, tell the user to
    enable it in Settings > Data and stop.
 3. `exports_create` for source `amazon_seller_performance`, this seller, with an explicit
-   **`from`/`to` range (e.g. the last 7 days)** - NOT a single day or a "latest" shorthand
-   (that errors). Ask for these columns:
+   **`from`/`to` range of the last 14-30 days** (omitting the range errors; a single day
+   is accepted but usually returns 0 rows), `orderByColumn: date DESC`. Ask for these columns:
    - `date`, `marketplace_country_code`
    - `seller_account_health_rating_6m_score`, `seller_account_health_rating_6m_status`
    - `seller_order_defect_rate_fba_60d_value`, `seller_order_defect_rate_fba_60d_target_less_than`, `seller_order_defect_rate_fba_60d_status`
@@ -99,7 +105,8 @@ A single red gate outranks five green ones. Report the worst gate first.
    - `seller_policy_violations_6m_warning_count`
 4. Poll until the export is ready, then `exports_raw_download` (or `exports_raw_url_get`)
    and take the row with `MAX(date)` from the returned range - that is the current
-   snapshot.
+   snapshot. Record its age in days (today minus `date`); if the export returned 0 rows,
+   widen the range to 60 days and retry before concluding anything.
 5. Score each gate using the `*_status` field where present (authoritative), otherwise
    compare `*_value` to its `*_target_less_than` / `*_target_greater_than` column - never
    a hardcoded threshold. **FBA-only guard:** for a seller-fulfilled metric (valid
@@ -110,7 +117,7 @@ A single red gate outranks five green ones. Report the worst gate first.
 ## Output format
 
 ```
-Account Health - {marketplace} - {date}   (MAX date from the pulled range)
+Account Health - {marketplace} - snapshot {date} ({age} days old{, STALE if > 3})
 Overall: {GREEN | AMBER | RED}   AHR {score}
 
 Gate            Metric                     Value     Target          Status
@@ -123,7 +130,8 @@ Delivery        On-Time Delivery Rate      {v}%      {target}        {G/A/R or n
 Policy          Open violations (6m)       {n}       0               {G/A/R from *_status}
 Policy          Active warnings            {n}       0               {G/A/R}
 
-(Target shows the account's own `*_target_*` value from the data, not a fixed number.
+(Values and targets are 0-1 fractions in the data - multiply both by 100 for the %
+display. Target shows the account's own `*_target_*` value from the data, not a fixed number.
 Seller-fulfilled metrics show n/a for FBA-only sellers.)
 
 Fix first:
@@ -149,8 +157,9 @@ policy violation in Account Health before it compounds.
 
 - Did I use the latest `date` row only (not sum multiple days)?
 - Did I compare each metric to its own target column, not a hard-coded number?
-- Did I pull with an explicit `from`/`to` range and take `MAX(date)` (not call for a
-  single "latest day", which errors)?
+- Did I pull a 14-30 day `from`/`to` range, take `MAX(date)`, and print the snapshot's
+  age (widening the range when 0 rows came back)?
+- Did I scale the 0-1 rate values and targets to % before rendering?
 - Did I render seller-fulfilled metrics as n/a when value=0 / status=GOOD (FBA-only),
   not as a red zero?
 - Did I use the policy-violation `*_status` fields for GOOD/BAD, not just the counts?
@@ -164,8 +173,9 @@ policy violation in Account Health before it compounds.
 - Reporting raw numbers with no target context (2% ODR means nothing without the
   < 1% target).
 - Hard-coding targets. Amazon can change them; the `*_target_*` columns are canon.
-- Calling the export for a single "latest day" with no range - it errors; pass a
-  `from`/`to` range and take MAX(date).
+- Calling the export without a range (errors) or for a single day (usually 0 rows, which
+  is not "healthy") - pass a 14-30 day range and take MAX(date).
+- Rendering `0.01` as "0.01%" - the rate columns are fractions; multiply by 100.
 - Rendering an FBA-only seller's valid-tracking / on-time-delivery (value=0, status=GOOD)
   as a red failure - it's n/a, not a problem.
 

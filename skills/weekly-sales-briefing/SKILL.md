@@ -22,7 +22,9 @@ Generates a structured Amazon sales briefing for the selected seller from DataDo
 - **Seller**: resolve at run time with `sellers_and_vendors_list` - pick the seller the user
   means (ask if several match), keep its `id` as `sellerOrVendorId`, its `name` for the
   header, and its `marketplaceCountryCode` for the currency. Never hardcode a seller.
-- **Currency**: derive from the marketplace (`GB` -> GBP £, `DE`/`FR`/`IT`/`ES`/`NL` -> EUR €,
+- **Currency**: derive from the marketplace. Note the two spellings: `sellers_and_vendors_list`
+  returns `marketplaceCountryCode: UK` while table columns return `GB` for the same rows -
+  map both (`UK`/`GB` -> GBP £, `DE`/`FR`/`IT`/`ES`/`NL` -> EUR €,
   `US` -> USD $, `CA` -> CAD $, and so on) and use that symbol everywhere below (written as
   `{cur}` in this document). Never hardcode one symbol.
 - **Anchor to the last complete day, not to "today".** The source lags a few days (3+
