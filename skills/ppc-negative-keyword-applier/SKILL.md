@@ -60,7 +60,18 @@ the top spenders.
 - MCP base: `https://mcp.datadoe.com/mcp/v1`
 - Read source: `Search Term Performance (Ads)` - `amazon_ads_search_terms_by_campaign_by_date`
   (source id `e94e967198`): `ad_search_term`, `ad_campaign_id`, `ad_group_id`,
-  `ad_spend`, `ad_clicks`, `ad_orders`, `ad_campaign_type` (+ names / keyword / match type).
+  `ad_spend`, `ad_clicks`, `ad_orders`, `ad_campaign_type` (+ names), and for the guards
+  `ad_keyword`, `ad_keyword_id`, `ad_match_type`, `ad_keyword_status`, `ad_campaign_status`.
+- **Two guards before anything is proposed as a negative:** (1) **own keyword** - a search
+  term that equals the ad group's own bid keyword (`lower(trim(ad_search_term)) ==
+  lower(trim(ad_keyword))` with a positive `ad_match_type` EXACT / PHRASE / BROAD) is never
+  negated; negating it silently switches off the keyword the seller is paying for. Route it
+  to `ppc-bid-optimizer-apply` (pause or lower the bid on `ad_keyword_id`). (2) **live
+  state** - a negative inside a PAUSED or ARCHIVED campaign or ad group validates and does
+  nothing; confirm state with `AMAZON_ADS_CAMPAIGNS_FIND` / `AMAZON_ADS_AD_GROUPS_FIND`
+  (`stateFilter.include: ["ENABLED"]`) before the dryRun. The `*_raw` Ads tables are
+  72-hour snapshots and are only the fallback when FIND is refused (FIND needs the
+  connection on Read and write).
 - Write action: `AMAZON_ADS_TARGETS_ADD` (negative keyword), gated behind a `dryRun`
   step. A negative keyword is `negative: true` + `targetType: "KEYWORD"` +
   `targetDetails: { keywordTarget: { keyword, matchType } }`, scoped to a `campaignId` +
@@ -89,13 +100,19 @@ the top spenders.
 2. `exports_sources_get` (query "search term") -> confirm `amazon_ads_search_terms_by_campaign_by_date` is
    `enabled`.
 3. `exports_create` for `amazon_ads_search_terms_by_campaign_by_date`, last 30-60 days, columns:
-   `ad_search_term`, `ad_keyword`, `ad_match_type`, `ad_campaign_id`,
-   `ad_campaign_name`, `ad_campaign_type`, `ad_group_id`, `ad_group_name`,
-   `ad_spend`, `ad_sales`, `ad_orders`, `ad_clicks`. Filter to
-   `ad_campaign_type = SPONSORED_PRODUCTS`.
-4. Poll, download, aggregate by `ad_search_term` (+ campaign/ad group). Apply the
-   wasteful rule above. Produce the candidate list with spend, clicks, orders,
-   and the target campaign/ad group ids.
+   `ad_search_term`, `ad_keyword`, `ad_keyword_id`, `ad_match_type`, `ad_keyword_status`,
+   `ad_campaign_id`, `ad_campaign_name`, `ad_campaign_status`, `ad_campaign_type`,
+   `ad_group_id`, `ad_group_name`, `ad_spend`, `ad_sales`, `ad_orders`, `ad_clicks`. Filter
+   to `ad_campaign_type = SPONSORED_PRODUCTS`.
+4. Poll, download, aggregate by `ad_search_term` (+ campaign/ad group) for the money, but
+   keep the keyword rows: one term can match several keywords in one ad group (close
+   variants - `trainer cleaning kit` matched both `trainer cleaning kit` and `trainers
+   cleaning kit`). Apply the wasteful rule above. **Own-keyword guard:** drop every
+   candidate whose normalised term equals `ad_keyword` on any of its rows with a positive
+   match type, and list them under "Excluded: own keyword - route to bid optimizer" with
+   the `ad_keyword_id` (note "already paused" when `ad_keyword_status` is PAUSED). Observed
+   on a UK account: the top dead term was the exact keyword of its own ad group. Produce the
+   candidate list with spend, clicks, orders, and the target campaign/ad group ids.
 5. **Dedupe against existing negatives.** `exports_create` for
    `amazon_ads_negative_keywords` with `from` = 14 days ago, `to` = today (it needs a
    date period; keep only rows from the latest `date`), filter
@@ -107,6 +124,21 @@ the top spenders.
    as "already negated". The snapshot is weekly, so a negative added in the last few
    days can still slip through; if the live ADD then reports a duplicate for that term,
    treat it as a no-op, not a failure.
+5b. **Live state check (campaign and ad group).** `actions_start`
+   `AMAZON_ADS_CAMPAIGNS_FIND` with `campaignQuery.adProductFilter.include:
+   ["SPONSORED_PRODUCTS"]`, `campaignIdFilter.include: [<candidate campaign ids>]`,
+   `stateFilter.include: ["ENABLED"]`; then `AMAZON_ADS_AD_GROUPS_FIND` with
+   `adGroupQuery.adGroupIdFilter.include: [<candidate ad group ids>]` and the same two
+   filters. Any candidate whose campaign or ad group does not come back is paused or
+   archived: drop it and list it under "Skipped: campaign / ad group paused". Observed:
+   a live FIND returned `deliveryReasons: ["AD_GROUP_PAUSED"]` for an ad group holding a
+   dead term - a negative there would validate and do nothing. If FIND is refused
+   ("Actions are not enabled ... Set access level to Read and write"), fall back to
+   `ad_campaign_status` from the export and `amazon_ads_ad_groups_raw.ad_group_state`
+   (72-hour snapshot) and say the check is snapshot-based. Optional: when `ad_keyword` is
+   empty, `AMAZON_ADS_TARGETS_FIND` with `negativeFilter.include: [false]` and
+   `keywordFilter: { include: [<term>], queryTermMatchType: "EXACT_MATCH" }` on the ad
+   group confirms whether a positive keyword with that text exists.
 
 ### Phase 2 - Confirm
 6. Show the ranked candidate list (most wasted spend first, ASIN-target terms excluded /
@@ -150,6 +182,8 @@ the top spenders.
 Negative-keyword candidates - {marketplace} - last {N} days
 Total wasted spend if applied: {currency}{sum}
 Already negated (skipped): {m} terms
+Excluded: own keyword - route to bid optimizer: {k} terms ({ad_keyword_id}, ...)
+Skipped: campaign / ad group paused: {p} terms
 
 #  Search term            Spend    Clicks  Orders  Campaign / Ad group      Match
 1  {term}                 {cur}{v} {n}     0       {campaign} / {group}     EXACT (neg)
@@ -175,6 +209,10 @@ null`. On "apply", the negative is added and future spend on that term stops.
 - Did I drop terms already present in `amazon_ads_negative_keywords` for that
   campaign/ad group, and report how many I skipped?
 - Did I split the batch so no action carries more than 25 targets?
+- Did I exclude terms that are the ad group's own bid keyword and route them to the bid
+  optimizer instead of negating them?
+- Did I confirm campaign and ad-group state live (`CAMPAIGNS_FIND` / `AD_GROUPS_FIND`,
+  ENABLED only) before the dryRun, and skip paused ones?
 - Did I run `dryRun`, confirm `VALIDATED` / `actionId: null`, and show it before any real write?
 - Did I get explicit approval before `dryRun: false`?
 - Is the marketplace / currency right for the output display (it is NOT passed in the
@@ -193,6 +231,10 @@ null`. On "apply", the negative is added and future spend on that term stops.
   not a junk query.
 - Re-adding a negative that already exists - check `amazon_ads_negative_keywords` first;
   duplicates waste the 25-target budget and confuse the before/after report.
+- Negating a term that is the ad group's own bid keyword - that silences the keyword
+  without anyone seeing why. Pause or lower it via the bid optimizer instead.
+- Adding a negative inside a paused campaign or ad group - it validates and changes
+  nothing. Confirm state live first; the `*_raw` tables are 72-hour snapshots.
 - Trusting the JSON schema alone - always dryRun against the live backend. The schema
   still lists `marketplaceScope` / `marketplaces`, but the backend rejects them for
   `AMAZON_ADS_TARGETS_ADD` on Sponsored Products (verified by dryRun 2026-10-03:
