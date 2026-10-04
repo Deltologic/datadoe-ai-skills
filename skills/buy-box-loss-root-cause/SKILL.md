@@ -32,23 +32,39 @@ synthesizes it from the buy-box % and price columns.
 
 ## The framework. The Buy Box gates (check in order)
 
-1. **Ownership** - the **anchor-day** `avg_buybox_percentage` well below 100 on an ASIN with
-   real traffic = you're sharing or losing the box *right now*. Use the last complete
+1. **Ownership** - the **anchor-day** `avg_buybox_percentage` below the thresholds in
+   Configuration (**< 95 = candidate, < 80 = loss**) on an ASIN with real traffic = you're
+   sharing or losing the box *right now*. Use the last complete
    day (the anchor, see step 3) plus a mandatory 7-day trend, never a 30-day average -
    averaging masks a dip-then-recovery and flags SKUs that already hold the box again.
    **Traffic floor:** flag an ASIN only when its anchor-day `total_page_views` >= 20 (or
-   its per-day `total_page_views` summed over the 7-day window >= 50) AND bb_now is low. A
+   its per-day `total_page_views` summed over the 7-day window >= 50) AND bb_now < 95. A
    low or 0% read on 0-5 page views is "no data", not a loss (on one re-test 52 of 70 ASINs
    flagged without the floor had zero page views that day). `avg_buybox_percentage` is
    never null - it is 0 when there was no featured-offer impression. An ASIN with no row on
    the anchor day has "no data that day", not 0%. Both columns are per-ASIN values repeated
    on every SKU row of the ASIN - read them once per ASIN-day (`max`), never summed across
    SKUs (see Configuration).
-2. **Price** - `your_price` above `featuredoffer_price` (or `lowest_price_new_plus_
-   shipping`) = you're priced out of the box.
-3. **Stock** - `available = 0` / very low = Amazon can suppress your offer.
+2. **Price** - compare `your_price` with `featuredoffer_price` (or `lowest_price_new_plus_
+   shipping`) on an in-stock SKU. Three readings, not one:
+   - `your_price > featuredoffer_price` = **priced out** (+gap).
+   - `your_price == featuredoffer_price` and 0 < bb_now < 100 = **shared Featured Offer at
+     matched price**. When you hold or share the box, `featuredoffer_price` *is* your own
+     price, so a gap of 0 does not clear you: it says another seller sits on the listing at
+     your price and Amazon rotates the box. That is an offer/enforcement question, not a
+     price cut.
+   - `your_price == featuredoffer_price` and bb_now == 0 with real traffic = **lost at
+     matched price** - a competitor has matched you and holds the box; verify in Seller
+     Central that the featured offer is not yours.
+   The gate can only read "priced out" when the box belongs to someone else at a lower
+   price; on a shared box it is structurally blind to price (one re-test: six flagged
+   ASINs, every one with gap 0, five wrongly routed to "fulfilment/health").
+3. **Stock** - `available = 0` / very low = Amazon can suppress your offer. Judge it on the
+   **latest** snapshot (today), not only the anchor day: the buy-box read is a lagged
+   anchor, a stockout is a today-problem (step 4).
 4. **Fulfilment/health** - FBM vs FBA and account-health issues also cost the box
-   (flag as "check" - not in these tables).
+   (flag as "check" - not in these tables). **Residual only:** no price row at all, or
+   price and stock both fine and bb_now == 0.
 Report the first gate that fails, biggest-revenue SKU first.
 
 ## Configuration
@@ -67,8 +83,9 @@ Report the first gate that fails, biggest-revenue SKU first.
       take `max()` of those three; `sum()` only sales, units and orders. Summing sessions or
       buy box across SKU rows double-counts.
     - **Traffic completeness:** the traffic columns come from Amazon's Sales and Traffic
-      report and may be delayed by up to 3 days and remain incomplete or be revised for up
-      to 30 days, while sales are ~1 day behind. Detect the anchor day on the traffic
+      report and lag by one to two weeks on real accounts (Amazon's own note says up to 3
+      days) and remain incomplete or be revised for up to 30 days, while sales are ~1 day
+      behind. Detect the anchor day on the traffic
       columns themselves (step 3a), not on sales, and treat the newest ~3 days as
       provisional even when sales look complete. Holes of several days still occur.
     `avg_buybox_percentage` is `nullable: false`: expect zeros, not nulls, when there was
@@ -88,7 +105,18 @@ Report the first gate that fails, biggest-revenue SKU first.
     Premium note (applies to all three premium tables above): a premium export costs 5 AI Tokens instead of 2 - nothing else differs, and the tables are part of the always-on default dataset, so they are never disabled. A 0-row export means no data in the window or an initial load still in progress - say which, and for price fall back to `amazon_fba_stranded_inventory.your_price` or `amazon_listings_with_cogs.listing_price_value` (with `fba_quantity_available` for stock); never render zeros.
     Also treat `your_price = 0` as missing (it is 0 on half to two thirds of the rows), not as a price.
   - `amazon_item_offers` exists as a future per-seller Buy Box source (per-offer
-    `IsBuyBoxWinner`, `SellerId`, offer prices); this skill does not build on it yet.
+    `IsBuyBoxWinner`, `SellerId`, offer prices); this skill does not build on it yet. It is
+    the source that would *name* the other seller on a "shared Featured Offer at matched
+    price" row - until then that row points at the offers list in Seller Central.
+- Thresholds (defined once here; use these words in the output):
+  - **bb_now < 95 = flag candidate** (chronic 90-95 sharing is worth listing on a hero ASIN).
+  - **bb_now < 80 = loss**; 80 <= bb_now < 95 = **sharing**.
+  - 7-day trend decides the label: **bb7 >= 90 and bb_now < 80 = "just lost it"**;
+    **bb7 < 90 = "chronically low"**.
+  - Candidate floor for the 7-day pull: anchor-day `total_page_views` >= 8 (see step 3).
+  - Traffic floor to flag: anchor-day `total_page_views` >= 20, or 7-day >= 50.
+  - 30-day sales window: the **30 calendar days ending yesterday** (sales are ~1 day
+    behind), independent of the anchor.
 - Currency/marketplace: localise (e.g. a German marketplace = EUR; the data uses the
   country code, e.g. `GB` for the UK marketplace).
 
@@ -123,7 +151,9 @@ Report the first gate that fails, biggest-revenue SKU first.
      product_name]`, `max(avg_buybox_percentage)` -> **bb_now**, `max(total_page_views)` ->
      anchor-day page views, `sum(total_sales)`, `sum(total_units_sold)` (one row per ASIN;
      `max` collapses the per-ASIN traffic values repeated on the ASIN's SKU rows).
-   - **(c) 30-day sales per ASIN (ranking input):** `groupBy [child_asin, product_name]`,
+   - **(c) 30-day sales per ASIN (ranking input):** `from`/`to` = the 30 calendar days
+     ending yesterday (sales are ~1 day behind), independent of the anchor - say the dates;
+     `groupBy [child_asin, product_name]`,
      `sum(total_sales)`, `sum(total_units_sold)` (one row per ASIN). Keep ASINs with
      `total_units_sold > 0` over the window - this is a **flag precondition, not just a
      ranking input**: the profit table also carries traffic-only ASIN-days (rows with a null
@@ -131,29 +161,44 @@ Report the first gate that fails, biggest-revenue SKU first.
      of the 4 ASINs that cleared the traffic floor in testing were parents showing a fake
      100% loss. No traffic columns in this shape - a `max` over 30 days returns the busiest
      day, and a `sum` double-counts SKU rows.
-   - **Flag** an ASIN as a *current* buy-box loss only if it sold in the window (step c),
-     has a non-null `sku` row on the anchor day, **bb_now** is low AND it clears the traffic
-     floor (anchor-day `total_page_views` >= 20, or 7-day `total_page_views` >= 50 from (d))
-     - not if only its 30-day average is low (a 30-day mean flags ASINs
-     that dipped and have since recovered). An ASIN with **no row on the anchor day** is
-     "no data that day", not 0%: use its own latest day within the last 7 complete days and
-     mark the date; if none, report "no recent buy-box read". Report the count of selling
-     ASINs without an anchor-day row and their 30-day sales as a single line (observed:
-     495 ASINs, GBP 9.3k) - they are not losses, they are unmeasured.
-   - **(d) 7-day trend for the flagged ASINs (mandatory):** the 7 complete days ending on
+   - **Candidates for (d):** every ASIN that sold in the window (c), has a non-null `sku`
+     row on the anchor day, **bb_now < 95**, and anchor-day `total_page_views` >= 8 (8 x 7 is
+     the smallest anchor-day read that can plausibly reach 50 over the week). This - not
+     "the flagged ASINs" - is the set (d) is pulled for: the flag rule's 7-day floor needs
+     (d) first, so pulling (d) only for flagged ASINs is circular and silently drops the
+     ASINs that only clear the 7-day floor (one re-test: 12 anchor-day page views / 56 over
+     7 days, and 10 / 69 - both real). Size on a 1,200-selling-ASIN account: 23 ASINs,
+     ~160 rows.
+   - **(d) 7-day trend for the candidates (mandatory):** the 7 complete days ending on
      the anchor, `groupBy [date, child_asin]`, `filters: child_asin in (...)` limited to the
-     flagged ASINs, `max(avg_buybox_percentage)` + `max(total_page_views)` per ASIN-day
+     candidates, `max(avg_buybox_percentage)` + `max(total_page_views)` per ASIN-day
      (one value per ASIN per day - never `sum` or `avg` across its SKU rows) ->
-     **bb_trend** = page-view-weighted bb over the 7 days (`sum(bb x page_views) /
+     **bb7** = page-view-weighted bb over the 7 days (`sum(bb x page_views) /
      sum(page_views)`, summed across the 7 days), to tell "just lost it" from "chronically
      low" and to confirm the anchor-day read is not a one-day dip on a handful of page
      views.
-4. `exports_create` on `amazon_fba_inventory_health` with `from = to = anchor day` (the
-   table requires a date range and keeps daily history, so the price snapshot matches the
-   bb read): `sku`, `child_asin`, `your_price`, `featuredoffer_price`,
-   `lowest_price_new_plus_shipping`, `available`, `filters: child_asin in (...)` for the
-   flagged ASINs; paginate with `skip` if the day still exceeds the cap. Optionally pull
-   the latest available day the same way to say whether the gap still exists today.
+   - **Flag** an ASIN as a *current* buy-box loss only if it is a candidate AND clears the
+     traffic floor (anchor-day `total_page_views` >= 20, or 7-day `total_page_views` >= 50
+     from (d)). **bb_now < 80 = loss**; 80 <= bb_now < 95 = **sharing** (listed below the
+     losses, worth a line on a hero ASIN). Label by trend: bb7 >= 90 and bb_now < 80 =
+     "just lost it", bb7 < 90 = "chronically low". Never flag on the 30-day average alone
+     (a 30-day mean flags ASINs that dipped and have since recovered). An ASIN with **no row
+     on the anchor day** is "no data that day", not 0%: use its own latest day within the
+     last 7 complete days and mark the date; if none, report "no recent buy-box read".
+     Report the count of selling ASINs without an anchor-day row and their 30-day sales as
+     a single line (observed: 495 ASINs, GBP 9.3k) - they are not losses, they are
+     unmeasured.
+4. `exports_create` on `amazon_fba_inventory_health` **twice** for the flagged ASINs
+   (`sku`, `child_asin`, `your_price`, `featuredoffer_price`,
+   `lowest_price_new_plus_shipping`, `available`, `filters: child_asin in (...)`; the table
+   requires a date range and keeps daily history; paginate with `skip` if a day exceeds the
+   cap):
+   - `from = to = anchor day` - the **price snapshot** that pairs with bb_now (same moment).
+   - `from = to = max available date` (usually today) - the **latest stock snapshot**.
+     Mandatory, not optional: the buy-box read is a lagged anchor (9-13 days behind on real
+     accounts) and a stockout is a today-problem. On one re-test the only two hard losses
+     (22 -> 0 units and 6 -> 0 units, `your_price` 0 on the latest day) were visible *only*
+     in this pull. Also use it to say whether a price gap still exists today.
 5. Join inventory onto the ASIN with **matching time bases**: pair the anchor-day price
    snapshot with **bb_now** (same day), never the 30-day average or a snapshot taken days
    later - both sides of the join must describe the same moment. `amazon_fba_inventory_health`
@@ -161,26 +206,39 @@ Report the first gate that fails, biggest-revenue SKU first.
    `child_asin` is the primary join key (the buy box is an ASIN-level read); the profit
    table also carries `sku`, so when an ASIN has several SKUs you can join on `sku` to put
    each SKU's own 30-day sales next to its price row.
-   - Price: for each SKU with `your_price > 0` (0 means missing, not free), gap =
-     `your_price - featuredoffer_price`.
-     Report the SKU that is actually in stock (`available` > 0; a null `available` is
-     unknown, not 0). If several are in stock, show each SKU's gap. A gap above 0 means
-     priced out.
-   - Stock: only when every SKU for that ASIN has `available` = 0 (nulls excluded).
-   - Otherwise: fulfilment/health check.
-6. Rank by sales at risk (30d sales x (1 - bb/100)) and render.
+   - Price (anchor-day snapshot): for each in-stock SKU (`available` > 0; a null
+     `available` is unknown, not 0) with `your_price > 0` (0 means missing, not free), gap
+     = `your_price - featuredoffer_price`. If several SKUs are in stock, show each. Then:
+     - gap > 0 -> **priced out (+gap)**; fix: match/beat `featuredoffer_price`.
+     - gap == 0 and 0 < bb_now < 100 -> **shared Featured Offer at matched price**; fix:
+       another seller is on the listing at your price - check the offers on the listing in
+       Seller Central; this is an enforcement/offer question, not a price cut.
+     - gap == 0 and bb_now == 0 (traffic floor cleared) -> **lost at matched price**;
+       verify the featured offer is not yours (a competitor matched your price).
+   - Stock (latest snapshot from step 4): when every in-stock SKU of the ASIN now has
+     `available = 0` (nulls excluded), report **stock (as of {latest date})** with the full
+     30-day sales exposed - even when the anchor-day read was fine. If the anchor-day
+     snapshot already showed 0, say "out of stock since at least {anchor}".
+   - Fulfilment/health check: **residual only** - no price row at all, or price and stock
+     both fine and bb_now == 0.
+6. Rank by sales at risk (30d sales x (1 - bb/100); a current stockout exposes the full
+   30d sales) and render.
 
 ## Output format
 
 ```
-Buy Box Loss - {marketplace} - buy-box as of {anchor day} (traffic lag {n}d{, gap: dates missing}; later days provisional)  (sales over last 30d)
-Traffic floor: {pv} page views on the anchor day / {pv7} over 7d · {k} ASINs with no anchor-day row (no data that day)
+Buy Box Loss - {marketplace} - buy-box as of {anchor day} (traffic lag {n}d{, gap: dates missing}; later days provisional)  (sales: 30 calendar days ending {yesterday})
+Traffic floor: {pv} page views on the anchor day / {pv7} over 7d · thresholds: < 80 loss, 80-94 sharing · {k} ASINs with no anchor-day row (no data that day)
 
-SKU                 BB%(now) BB%(7d) PV   Sales    Likely cause            Fix
-{sku}               {bb}%    {bb7}%  {pv} {cur}..  priced out (+{cur}gap)  match/beat {cur}{feat}
-{sku}               {bb}%    {bb7}%  {pv} {cur}..  out of stock            restock (see restock skill)
-{sku}               {bb}%    {bb7}%  {pv} {cur}..  fulfilment/health       check FBM/AHR
+SKU                 BB%(now) BB%(7d) PV   Sales    Likely cause                               Fix
+{sku}               {bb}%    {bb7}%  {pv} {cur}..  priced out (+{cur}gap)                     match/beat {cur}{feat}
+{sku}               {bb}%    {bb7}%  {pv} {cur}..  shared Featured Offer at matched price     check offers on the listing (enforcement, not a price cut)
+{sku}               {bb}%    {bb7}%  {pv} {cur}..  lost at matched price                      verify the featured offer is not yours
+{sku}               {bb}%    {bb7}%  {pv} {cur}..  stock (as of {latest date})*               restock (see restock skill)
+{sku}               {bb}%    {bb7}%  {pv} {cur}..  fulfilment/health (residual)               check FBM/AHR
 
+* stock judged on the latest snapshot ({latest date}), not the anchor day; full 30d sales exposed.
+Sharing (80-94%, hero ASINs only): {sku} {bb}% / {bb7}% - {cause}
 Biggest sales at risk: {sku} ({cur}.. exposed).
 ```
 
@@ -195,9 +253,13 @@ the anchor day is not flagged, and neither is one at 75% on 4 page views. An ASI
 three SKUs shows the same 41% and 310 page views on each SKU row: read once (`max`), not
 summed to 930 page views. The skill then joins the anchor-day prices: if `your_price`
 12.90 > `featuredoffer_price` 11.95, the cause is "priced out by 0.95" and the fix is to
-match/beat 11.95 (or hold price if margin matters more than the box). If instead
-`available = 0`, the cause is stock, routed to the restock skill. Same signal, different
-fix - the skill picks the right one.
+match/beat 11.95 (or hold price if margin matters more than the box). If `your_price`
+18.99 == `featuredoffer_price` 18.99 and the ASIN sits at 81%, the gap of 0 is not a clean
+bill: the featured offer *is* this seller's price, so another seller shares the listing at
+the same price - "shared Featured Offer at matched price", check the offers, not the
+price. And if the latest snapshot shows `available = 0` where the anchor day still had 22
+units, the cause is stock as of today, routed to the restock skill with the full 30-day
+sales exposed. Same signal, different fix - the skill picks the right one.
 
 ## Quality self-check
 
@@ -215,6 +277,14 @@ fix - the skill picks the right one.
 - Did I treat ASINs with no anchor-day row as "no data that day" rather than 0%?
 - Did I pair the anchor-day price snapshot (`from = to = anchor day`) with the anchor-day
   buy-box read (same time basis)?
+- Did I pull the 7-day trend for the **candidate set** (bb_now < 95, anchor-day page views
+  >= 8), not only for ASINs already flagged, so the 7-day floor can actually admit an ASIN?
+- Did I read a gap of 0 with 0 < bb_now < 100 as "shared Featured Offer at matched price"
+  (another seller at my price), not as "price is fine, must be fulfilment"?
+- Did I judge stock on the **latest** snapshot, and expose the full 30-day sales on a
+  current stockout even when the anchor-day read looked fine?
+- Did I use the defined thresholds (< 95 candidate, < 80 loss, bb7 >= 90 "just lost it")
+  and the pinned 30-day window (ending yesterday), so another run gives the same list?
 - Did I check price gap AND stock before blaming "fulfilment"?
 - Did I rank by revenue at risk, not by lowest bb%?
 - Did I keep margin in mind (winning the box below cost isn't a win)?
@@ -235,8 +305,18 @@ fix - the skill picks the right one.
   silently truncates after a few days; use the calibration, anchor-day, 30-day-per-ASIN
   and filtered 7-day shapes from step 3.
 - Anchoring on sales completeness - sales are ~1 day behind but the traffic columns lag
-  up to 3 days and can be revised for 30; a day with complete sales and half the usual
-  sessions is not complete for buy box.
+  one to two weeks on real accounts and can be revised for 30 days; a day with complete
+  sales and half the usual sessions is not complete for buy box.
+- Treating gap = 0 as "price is fine" on a shared box - when you hold or share the
+  Featured Offer, `featuredoffer_price` is your own price. Gap 0 with 0 < bb_now < 100
+  means another seller matches you; routing it to "fulfilment/health" sends the reader to
+  the wrong screen.
+- Judging stock on the anchor-day snapshot when the anchor is a week old - a stockout is a
+  today-problem; pull the latest day and report "stock (as of {date})".
+- Pulling the 7-day trend only for already-flagged ASINs - circular with the 7-day floor;
+  pull it for the candidate set (bb_now < 95, anchor-day page views >= 8).
+- Choosing your own "low" threshold - < 95 candidate, < 80 loss, as defined in
+  Configuration; a different cut gives a different list.
 - Anchoring on the latest day present when it is isolated after a gap - the anchor must
   be contiguous with the days before it.
 - Expecting null `avg_buybox_percentage` - the column is never null; it is 0 when there

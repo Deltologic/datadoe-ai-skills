@@ -69,9 +69,20 @@ is the fix:
    sell - lower severity than a full `LISTING_SUPPRESSED`. Flag it below full suppression.
 4. **No offer / stranded inventory** - `offers == []` means no active offer (it implies
    non-buyable; the reverse does not hold - most non-buyable rows still carry an offers
-   array with a price and simply have no sellable stock). **Stranded** = you still hold
-   stock that cannot sell: `amazon_fba_stranded_inventory` is the source of record
-   (`stranded_reason`, `primary_action`); in `amazon_listings_with_cogs` the gate is
+   array with a price and simply have no sellable stock). **Before counting anything**,
+   split off the rows that never had an offer: **`summaries.fnSku` absent AND `offers ==
+   []` AND `fulfillment_availability` empty** = **"no offer ever (variation parent or
+   never-offered SKU)"**. Variation parents carry `LISTING_SUPPRESSED` and empty offers as
+   a matter of course and cost nothing; on one re-test 26 of 157 LISTING_SUPPRESSED rows
+   and 247 of 415 no-offer rows were parents, and 183 more were SKUs that never had an
+   offer. The signature matched 298 of 298 known parents; do **not** detect parents by SKU
+   name (`parent`, `_par`) - brittle. Exclude that bucket from the suppressed headline and
+   from "no offer"; report its count once as context (optionally confirm with
+   `attributes.parentage_level == "parent"` if `attributes` is pulled - large, not needed).
+   **Stranded** = you still hold stock that cannot sell: `amazon_fba_stranded_inventory` is
+   the source of record (`stranded_reason`, `primary_action`, and the **auto-removal
+   deadline** `date_to_take_auto_removal` - Amazon disposes of the units on that date if
+   nothing is done, so it is the first sort key); in `amazon_listings_with_cogs` the gate is
    `fba_has_stranded_inventory = true` (derived from that table, so it covers every
    stranded SKU). `listing_status == Inactive` AND `fba_quantity_available > 0` is only a
    secondary "dead offer with stock" signal - it catches about a third of Amazon's
@@ -86,10 +97,16 @@ Rank the failures by **revenue at risk** (recent sales, or units on hand x price
 stranded stock), not by count - one suppressed hero SKU outranks ten dead long-tail
 ones. Recent sales come from `amazon_profit_by_sku_and_date` at **SKU grain**
 (`sum(total_sales)` per `sku` over the last 30 days): a flagged SKU's own sales are its
-revenue at risk. Keep `child_asin` alongside for the sibling note: when a flagged SKU has 0
-sales in the window and a sibling SKU on the same ASIN is BUYABLE, label it "covered by
-sibling SKU <sku>" (the ASIN keeps selling through the sibling) rather than "nothing at
-risk".
+revenue at risk. Keep `child_asin` alongside for the **sibling rule**, which applies in
+every bucket whenever a flagged SKU has an `Active` sibling on the same `child_asin` -
+not only when the flagged SKU sold nothing: print the sibling and the sibling's own 30-day
+sales next to the flagged SKU's, and label the row **"duplicate SKU, ASIN still selling
+via <sibling> (<cur><sibling sales>)"** (0 own sales: "covered by sibling SKU <sibling>").
+Keep the flagged SKU's own sales as its at-risk figure, but a covered duplicate can never
+be TOP EXPOSURE: **TOP EXPOSURE = the highest at-risk row without an Active sibling.** One
+re-test headlined an inactive EU-suffixed SKU at GBP 1,780 whose sibling on the same ASIN
+was Active at GBP 12,718 - the ASIN was not at risk at all; four more of the top ten had
+the same shape.
 
 ## Configuration
 
@@ -107,7 +124,9 @@ risk".
     Export cap: **100 rows per JSON export / 250 per CSV**, and JSON columns cannot be
     filtered server-side (`contains` on `summaries` / `issues` is rejected). Filters work
     only on scalar columns (`sku`, `child_asin`, `marketplace_country_code`,
-    `last_seen_at`) - use `sku in (...)` to pull a targeted subset.
+    `last_seen_at`) - use `sku in (...)` to pull a targeted subset. Tested limit: an
+    `sku in (...)` filter with 855 SKUs / 23,085 characters was accepted; page it with
+    `limit 250`, `skip n*250`, `orderByColumn sku`.
   - `amazon_listings_with_cogs` [premium] - the narrowing table and the stranded gate:
     `listing_status` (Active/Inactive/Incomplete), `fba_quantity_available`,
     `fba_has_stranded_inventory` (true when at least one stranded-inventory row exists for
@@ -119,7 +138,15 @@ risk".
     different `listing_id` (150 of 11,449 on one account) - keep one row per SKU (max
     `fba_quantity_available`), never join on raw row count.
   - `amazon_fba_stranded_inventory` - Amazon's own stranded list and the stranded source
-    of record: `stranded_reason`, `primary_action`, `your_price`, plus fulfillable units.
+    of record (24 columns, `requiresDatePeriod: false`, not premium, one row per stranded
+    SKU, full snapshot replaced daily). Pull: `sku`, `child_asin`, `product_name`,
+    `stranded_reason`, `primary_action`, `date_stranded`, **`date_to_take_auto_removal`**,
+    `status_primary`, `status_secondary`, `error_message`, `your_price`,
+    `fulfillable_qty`, `reserved_quantity`, `unfulfillable_qty`. The auto-removal date is
+    the deadline Amazon will act on without you (on one re-test 38 of 123 stranded SKUs
+    were 7 days from it, 48 within 16 days: 698 units, GBP 7,880). A `date_to_take_auto_removal`
+    in the **past** with stock still listed means "verify in Seller Central - Amazon's date
+    may be stale", not "already removed".
     `amazon_listings_with_cogs.fba_has_stranded_inventory` is derived from it and is the
     cross-check / gate.
   - `amazon_profit_by_sku_and_date` [premium] - recent sales, to rank issues by revenue
@@ -130,8 +157,8 @@ risk".
     the ranking rule above). Not used for ranking, but if you read `total_sessions`,
     `total_page_views` or `avg_buybox_percentage` from this table: they are per-child-ASIN
     values repeated on every SKU row of that ASIN - group by `[date, child_asin]` and take
-    `max()`, never sum them across SKUs - and they can lag up to 3 days and be revised for
-    30, while sales are ~1 day behind. Premium note: a premium export costs 5 AI Tokens instead of 2 - nothing else differs, and the table is part of the always-on default dataset, so it is never disabled. A 0-row export means no data in the window or an initial load still in progress - say which, and rank by units on hand x `listing_price_value` instead; never render zeros. (Item name and main image come from
+    `max()`, never sum them across SKUs - and they lag one to two weeks on real accounts and
+    can be revised for 30 days, while sales are ~1 day behind. Premium note: a premium export costs 5 AI Tokens instead of 2 - nothing else differs, and the table is part of the always-on default dataset, so it is never disabled. A 0-row export means no data in the window or an initial load still in progress - say which, and rank by units on hand x `listing_price_value` instead; never render zeros. (Item name and main image come from
     `summaries`, so a separate catalog source is usually not needed.)
   - `amazon_products_by_child_asin` (optional fallback) - `product_name`, category,
     `product_image_url` if `summaries` name/image is missing or you want richer catalog data.
@@ -156,19 +183,34 @@ risk".
    paginate with `skip`), dedupe on `sku`, and bucket: Active / Inactive / Incomplete,
    stranded (`fba_has_stranded_inventory = true`), and "inactive with stock"
    (`listing_status != Active` AND `fba_quantity_available > 0`). Pull
-   `amazon_fba_stranded_inventory` (small, one row per stranded SKU) for the reason and
-   action. If `amazon_listings_with_cogs` returns 0 rows (initial load still in progress),
-   say so, skip to step 4 and page the raw table instead.
-4. **Pull raw listings only for the SKUs that need the JSON gates:** `exports_create` on
+   `amazon_fba_stranded_inventory` (small, one row per stranded SKU) with the column list
+   from Configuration - reason, action and the auto-removal deadline. **Pull the 30-day
+   sales now, before the raw pull** (they drive the narrowing in step 4): `exports_create`
+   on `amazon_profit_by_sku_and_date`, `from`/`to` = the last 30 days, `groupBy [sku,
+   child_asin]`, `sum(total_sales)`, `sum(total_units_sold)`, no SKU filter (CSV; paginate
+   with `skip` above 5,000 rows). Two data facts: a `sku` can return **two rows**, one with
+   `child_asin` null (account-only ad rows) - sum per `sku` in code; and a SKU with no sales
+   has **no row at all**, so a missing row means 0, never "unknown". If
+   `amazon_listings_with_cogs` returns 0 rows (initial load still in progress), say so,
+   skip to step 4 and page the raw table instead.
+4. **Pull raw listings only for the SKUs that need the JSON gates.** Narrow to:
+   **Incomplete, or non-Active with 30-day sales > 0 or stock > 0, or stranded.** Skip
+   Inactive SKUs with 0 stock and 0 sales - an Inactive SKU with no stock and no sales has
+   zero revenue at risk, and its enforcement state changes nothing (on one re-test the
+   broad set - every Inactive / Incomplete / stranded SKU - was 5,719 SKUs = 23 CSV pages,
+   past the rate limit below; the narrowed set was 855 SKUs = 4 pages, and the 4,864
+   skipped were all Inactive with nothing at risk). `exports_create` on
    `amazon_listings_raw` with a bounded column set - `sku`, `child_asin`,
    `marketplace_country_code`, `summaries`, `issues`, `offers`,
-   `fulfillment_availability`, `last_seen_at` - and `filters: sku in (...)` for the
-   Inactive / Incomplete / stranded / inactive-with-stock SKUs from step 3 (CSV, `limit:
-   250`, `skip: n*250`, `orderByColumn: sku`). Download via `exports_raw_url_get` to a
-   file and parse per row - do not dump raw JSON into context. Only a *full* sweep
-   (needed to catch "buyable but flagged" rows) pages the whole table: count first
-   (`count(sku)` grouped by `marketplace_country_code`); budget ~40 CSV pages per 10k
-   SKUs, with retries - bursts above ~15 MCP calls get rate-limited.
+   `fulfillment_availability`, `last_seen_at` - and `filters: sku in (...)` for that set
+   (CSV, `limit: 250`, `skip: n*250`, `orderByColumn: sku`; an 855-SKU / 23k-character
+   filter was accepted). Download via `exports_raw_url_get` to a file and parse per row -
+   do not dump raw JSON into context. Report the headline as "gates applied to {m} of {N}
+   SKUs; {N-m} Inactive SKUs with no stock and no sales not gate-checked". Only a *full*
+   sweep (needed to count "buyable but flagged" rows across the whole catalog) pages the
+   whole table: count first (`count(sku)` grouped by `marketplace_country_code`); budget
+   ~40 CSV pages per 10k SKUs, with retries - bursts above ~15 MCP calls get rate-limited.
+   Under the narrowed pull, say "buyable-but-flagged counted within the gate-checked set".
 5. **Apply the gates** per SKU/marketplace by parsing the JSON:
    - `issues[]`: read `enforcements.actions[].action` and bucket by action -
      `LISTING_SUPPRESSED` / `CATALOG_ITEM_REMOVED` (suppressed), `SEARCH_SUPPRESSED`
@@ -179,22 +221,35 @@ risk".
      suppressed). `DISCOVERABLE` absent = won't show in search. `summaries` NULL = no
      snapshot payload.
    - `offers`: `[]` = no active offer (always non-buyable; the reverse is not true).
+   - **Parent / never-offered test first:** `summaries.fnSku` absent AND `offers == []` AND
+     `fulfillment_availability` empty -> bucket "no offer ever (variation parent or
+     never-offered SKU)"; drop these rows from the suppressed, no-offer and error counts
+     before anything else is tallied, and report the count once as context.
+   - **Roll up identical ERROR root causes** across SKUs (same `code` / same message
+     pattern, e.g. media on one host returning HTTP 403 behind several codes) into one
+     line with the SKU count; keep per-SKU rows only for SKUs with sales or stock.
 6. **Stranded + context + rank:** stranded = `fba_has_stranded_inventory = true` (step 3)
-   with `stranded_reason` / `primary_action` from `amazon_fba_stranded_inventory`; take
-   `listing_name` / `listing_price_value`, and item name / main image from `summaries`.
-   Pull recent sales: `exports_create` on `amazon_profit_by_sku_and_date`, `from`/`to` =
-   the last 30 days, `groupBy [sku, child_asin]`, `sum(total_sales)`, `sum(total_units_sold)`,
-   `filters: sku in (...)` for the flagged SKUs **plus the "inactive, no issue" and
-   "inactive with stock" SKUs** (so an out-of-stock hero surfaces with its sales - one
-   tested account had an inactive SKU with GBP 2,805 / 566 units in 30 days and no issue)
-   (CSV; paginate with `skip` above 5,000 rows). Two data facts: a `sku` can return **two
-   rows**, one with `child_asin` null (account-only ad rows) - sum per `sku` in code; and a
-   SKU with no sales has **no row at all**, so a missing row means 0, never "unknown". Each
-   SKU's own 30-day sales are its revenue at risk; a flagged SKU with 0 sales whose sibling
-   SKU on the same `child_asin` is live gets "covered by sibling SKU <sku>" - judge the
-   sibling by `amazon_listings_with_cogs.listing_status = Active` from step 3 (its
-   `summaries.status` is not in the step-4 pull unless you add the siblings to `sku in
-   (...)`). Sort by revenue at risk (then units on hand x price for stranded, then severity).
+   with `stranded_reason` / `primary_action` / `date_to_take_auto_removal` from
+   `amazon_fba_stranded_inventory`; take `listing_name` / `listing_price_value`, and item
+   name / main image from `summaries`. **Sort the stranded section by
+   `date_to_take_auto_removal` ascending first**, then by units x price; lead it with the
+   URGENT line (SKUs, units and value reaching auto-removal within 14 days). **Roll up by
+   `(stranded_reason, primary_action)`** with SKU count, units, value and 30-day sales - on
+   one account "Potential high pricing error" -> "Update price" was 99 of 123 SKUs and GBP
+   12.0k of 15.5k, and the same issue codes sat behind 46 of the LISTING_SUPPRESSED rows:
+   when one pair dominates both lists, say **"one fix clears both lists"** - it is the most
+   actionable sentence in the report. Join the 30-day sales from step 3 onto every bucket -
+   including "inactive, no issue" and "inactive with stock", so an out-of-stock hero
+   surfaces with its sales (one tested account had an inactive SKU with GBP 2,805 / 566
+   units in 30 days and no issue). Each SKU's own 30-day sales are its revenue at risk.
+   **Sibling rule (every bucket):** whenever a flagged SKU has a sibling on the same
+   `child_asin` with `amazon_listings_with_cogs.listing_status = Active` (step 3; its
+   `summaries.status` is not in the step-4 pull), print the sibling and the sibling's own
+   30-day sales (they are in the step-3 export) and label the row "duplicate SKU, ASIN
+   still selling via <sibling> (<cur><sibling sales>)" - or "covered by sibling SKU
+   <sibling>" when own sales are 0. Keep own sales as the at-risk figure, but **TOP
+   EXPOSURE is the highest at-risk row without an Active sibling.** Sort by revenue at
+   risk (then units on hand x price for stranded, then severity).
 7. **Report** the prioritized list with the failing gate, the exact issue text
    (`code` + `message`), the snapshot age from `last_seen_at`, and the concrete fix.
    Group by severity; call out the single biggest exposure; give the "inactive, no
@@ -204,24 +259,33 @@ risk".
 
 ```
 Listing Health - {marketplace} - snapshot as of {last_seen_at} ({age})
-Scanned {N} listings · {s} suppressed (LISTING_SUPPRESSED) · {r} catalog item removed · {e} errors ({eb} of them buyable but flagged) · {a} attribute-suppressed · {q} search-suppressed · {t} stranded · {w} warnings
-Context: {i} inactive with no issue (out-of-stock / inactive offers - not suppressions)
+Scanned {N} listings · gates applied to {m} of {N} SKUs ({N-m} Inactive with no stock and no sales not gate-checked)
+{s} suppressed child SKUs (LISTING_SUPPRESSED; {sp} variation parents / never-offered excluded) · {r} catalog item removed · {e} errors ({eb} buyable but flagged, counted within the gate-checked set) · {a} attribute-suppressed · {q} search-suppressed · {t} stranded · {w} warnings
+Context: {i} inactive with no issue (out-of-stock / inactive offers - not suppressions) · {p} no offer ever (variation parents or never-offered SKUs)
 
-TOP EXPOSURE: {sku} ({product}) - {gate failed}, ~{cur}{sales/30d} at risk (this SKU's own sales)
+TOP EXPOSURE: {sku} ({product}) - {gate failed}, ~{cur}{sales/30d} at risk (this SKU's own sales; no Active sibling)
+URGENT: {n} stranded SKUs reach auto-removal by {date} - {units} units, {cur}{value}
+{One fix clears both lists: "{stranded_reason}" -> "{primary_action}" is {k} of {t} stranded SKUs ({cur}{value}) and sits behind {j} of the {s} suppressions.}
 
 ERRORS / SUPPRESSED (fix first)
   SKU              Status          Issue (code)                        Fix                         At risk
   {sku}            suppressed      missing price (5009)                add price / restore offer    {cur}{v}/mo
+  {sku}            suppressed      {issue (code)}                      {fix}                        {cur}{v}/mo - duplicate SKU, ASIN still selling via {sku2} ({cur}{v2})
   {sku}            attr-suppressed invalid main image (INVALID_IMAGE)  add compliant main image     covered by sibling SKU {sku2}
+  {n} SKUs         error           {rolled-up root cause (codes)}      {fix}                        {cur}{v}/mo across them
 
 BUYABLE BUT FLAGGED (verify - enforcement or ERROR on a live offer)
   {sku}            buyable         {issue (code)}                      verify / fix                 {cur}{v}/mo (own sales; can be the largest exposure)
 
 INACTIVE, NO ISSUE, WITH RECENT SALES (out of stock, not suppressed - restock)
   {sku}            inactive        no issue, 0 stock                   restock                      {cur}{v}/mo
+  {sku}            inactive        no issue, 0 stock                   none - duplicate             {cur}{v}/mo - ASIN still selling via {sku2} ({cur}{v2})
 
-STRANDED INVENTORY (stock that can't sell)
-  {sku}            {units} units on hand, {stranded_reason} -> {primary_action}   {cur}{units x price}
+STRANDED INVENTORY (stock that can't sell; sorted by auto-removal date)
+  SKU              Auto-removal     Units  {stranded_reason} -> {primary_action}             Value          Sales/30d
+  {sku}            {date}           {u}    {reason} -> {action}                               {cur}{u x p}   {cur}{v}
+  {sku}            {date} (past - verify in Seller Central, date may be stale)   ...
+  By reason -> action: {reason} -> {action}: {k} SKUs, {units} units, {cur}{value}, {cur}{sales}/30d
 
 WARNINGS (perf drag, fix next)
   {sku}            missing {attribute} -> add it
@@ -236,11 +300,18 @@ enforcement and one ERROR: the feed's product type conflicts with Amazon's catal
 value. That's gate 1+2 failing - the listing is suppressed, so it leads the report with
 its own trailing 30-day sales as the revenue at risk and the fix "align the product type
 to Amazon's value"; a second suppressed SKU on the same ASIN sold nothing in 30 days while
-its sibling stayed buyable, so it reads "covered by sibling SKU" instead of a figure.
+its sibling stayed buyable, so it reads "covered by sibling SKU" instead of a figure. An
+inactive EU-suffixed SKU with GBP 1,780 of its own sales is not the headline either: its
+sibling on the same ASIN is Active at GBP 12,718, so it reads "duplicate SKU, ASIN still
+selling via <sibling>", and TOP EXPOSURE goes to the biggest row with no Active sibling.
 Separately, a SKU is `Active` and buyable by every raw gate but
 `fba_has_stranded_inventory` is true: Amazon's stranded list says "Potential high pricing
-error" -> "Update price" on 141 units - stranded inventory, flagged with units x price and
-that action. A third SKU is live but missing a recommended attribute -> a warning, listed
+error" -> "Update price" on 141 units, auto-removal in 7 days - stranded inventory, at the
+top of the stranded table with units x price and that action; the same reason -> action
+pair covers 99 of the 123 stranded SKUs and the same codes sit behind 46 suppressions, so
+the report says "one fix clears both lists". The 26 variation parents carrying
+`LISTING_SUPPRESSED` with no fnSku and no offer are excluded from the suppressed count and
+reported once as "no offer ever". A third SKU is live but missing a recommended attribute -> a warning, listed
 below the blockers. The 4,900 out-of-stock offers that merely lack BUYABLE appear once, as
 a context count. Same scan, three severities, ordered by what costs the most.
 
@@ -258,6 +329,15 @@ a context count. Same scan, three severities, ordered by what costs the most.
 - Did I gate stranded on `fba_has_stranded_inventory` (with
   `amazon_fba_stranded_inventory` for reason/action), not on `Inactive` + stock alone?
 - Did I dedupe `amazon_listings_with_cogs` on `sku` before joining?
+- Did I split off "no offer ever" rows (`summaries.fnSku` absent AND `offers == []` AND
+  empty `fulfillment_availability`) before counting suppressions and no-offer rows, and
+  not detect parents by SKU name?
+- Did I pull `date_to_take_auto_removal`, sort stranded by it, lead with the URGENT line,
+  roll up by reason -> action, and say "one fix clears both lists" when it does?
+- Did I apply the sibling rule in every bucket (not only at 0 sales), print the sibling's
+  own sales, and keep a covered duplicate out of TOP EXPOSURE?
+- Did I narrow the raw pull to Incomplete / non-Active with sales or stock / stranded, pull
+  the sales export first, and state "gates applied to {m} of {N}" in the headline?
 - Did I rank by revenue at risk / units on hand, not by issue count - using each SKU's
   own 30-day sales from `amazon_profit_by_sku_and_date`, and labelling a 0-sales flagged
   SKU "covered by sibling SKU" when a sibling on the same ASIN is BUYABLE?
@@ -286,6 +366,14 @@ a context count. Same scan, three severities, ordered by what costs the most.
 - Treating `amazon_listings_raw` as a time series - it's a current snapshot; use
   `last_seen_at` for age, and don't expect a date range to subset it.
 - Reporting a wall of dead long-tail SKUs above the one suppressed hero SKU.
+- Counting variation parents (no fnSku, no offer, no fulfillment availability) as
+  suppressed or as "no offer" - a parent is never buyable and costs nothing.
+- Headlining a duplicate SKU whose sibling on the same ASIN is Active and selling - the
+  ASIN is not at risk; TOP EXPOSURE is the biggest row without an Active sibling.
+- Ignoring `date_to_take_auto_removal` - stranded stock past that date is disposed of by
+  Amazon, not merely unsellable.
+- Pulling raw listings for every Inactive SKU - thousands of pages for SKUs with no stock
+  and no sales, where the enforcement state changes nothing.
 
 ## Notes
 
@@ -295,4 +383,5 @@ a context count. Same scan, three severities, ordered by what costs the most.
   approval) - the skill flags them and points you to the exact issue to resolve.
 - A DataDoe skill, built on DataDoe `amazon_listings_raw` (status, issues, enforcement
   actions, offers) plus `amazon_listings_with_cogs` (status, stock, stranded flag),
-  `amazon_fba_stranded_inventory` and SKU-level sales from `amazon_profit_by_sku_and_date`.
+  `amazon_fba_stranded_inventory` (reason, action, auto-removal date) and SKU-level sales
+  from `amazon_profit_by_sku_and_date`.
