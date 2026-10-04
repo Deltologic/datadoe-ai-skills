@@ -44,6 +44,21 @@ negative-keyword workflow.
    - **Barely over** (e.g. ~32-33% ACoS vs a 30% break-even) that convert in volume ->
      **bid trim**, not negation - they're close to profitable.
    - **Hard bleeders** (e.g. 100%+ ACoS) -> negate (or exact-match at a low bid).
+3. **Own keyword - never a negative.** A dead or hard-bleeder term whose normalised text
+   equals the ad group's own bid keyword (`lower(trim(ad_search_term)) ==
+   lower(trim(ad_keyword))` with `ad_match_type` EXACT / PHRASE / BROAD; auto campaigns carry
+   targeting expressions in `ad_keyword`, so they never match) is the keyword you are
+   paying for. Negating it silently blocks that keyword with no trace of why. Keep it in
+   its own row group, "Own keyword", and route it to `ppc-bid-optimizer-apply` (pause or
+   lower the bid on `ad_keyword_id`) - never to the negative applier. Observed: `trainer
+   cleaning kit` topped the dead list of a UK account; it was the exact keyword of its own
+   ad group. If `ad_keyword_status` is already PAUSED, the spend is historical: report it,
+   recommend nothing.
+4. **Paused campaigns and ad groups.** Spend from a campaign or ad group that is now
+   PAUSED or ARCHIVED is money already lost, not money to act on: a negative there
+   validates and changes nothing. Mark those rows `(paused)`, report their subtotal, and
+   keep them out of both hand-off lists. Observed: GBP 93 of a GBP 261 dead bucket and about
+   GBP 34 of hard overspend sat in four paused campaigns.
 Sort each by spend so the biggest amounts come first. (For account-level TACoS trend,
 use the Weekly Business Review skill - this one is term-level.)
 
@@ -78,8 +93,18 @@ modifier you checked in the recommendation.
 - Data sources:
   - `Search Term Performance (Ads)` (`amazon_ads_search_terms_by_campaign_by_date`) - the customer search term that triggered the ad. Primary source:
     `ad_search_term`, `ad_spend`, `ad_clicks`, `ad_orders`, `ad_sales`, `ad_campaign_type`,
-    plus `ad_campaign_id` / `ad_group_id` (needed so the apply skills can target) and
-    `ad_keyword_bid` (the bid on the keyword that matched - this table does carry it).
+    plus `ad_campaign_id` / `ad_group_id` (needed so the apply skills can target),
+    `ad_keyword_bid` (the bid on the keyword that matched - this table does carry it), and
+    for the two guards: `ad_keyword`, `ad_keyword_id`, `ad_match_type`, `ad_keyword_status`
+    (own-keyword check, all on the same row - no second export) and `ad_campaign_status`
+    (campaign state as of each row's date).
+  - **Campaign and ad-group state**, three sources by purpose: `ad_campaign_status` in the
+    export above (cheapest - take the value on the latest date per campaign);
+    `amazon_ads_campaigns_raw.ad_campaign_state` and `amazon_ads_ad_groups_raw.ad_group_state`
+    (current snapshot, **refreshed every 72 hours** - good enough for this read-only report;
+    one extra export filtered `ad_group_id in (...)` for the ad groups in the dead and hard
+    buckets); `AMAZON_ADS_CAMPAIGNS_FIND` / `AMAZON_ADS_AD_GROUPS_FIND` (live - the applier's
+    job before any write, not needed here).
   - `Keyword Targeting Performance` (`amazon_ads_targeting_by_campaign_by_date`) - your bid keywords, for the
     keyword-level view. It carries **no bid column** - current bids come from
     `AMAZON_ADS_TARGETS_FIND` (see the bid-optimizer skill).
@@ -100,9 +125,14 @@ modifier you checked in the recommendation.
 1. `sellers_and_vendors_list` -> pick the seller.
 2. `exports_sources_get` (query "search term") -> confirm `amazon_ads_search_terms_by_campaign_by_date` is `enabled`.
 3. `exports_create` for `amazon_ads_search_terms_by_campaign_by_date`, last 30-60 days:
-   - `groupBy`: `["ad_search_term", "ad_campaign_id", "ad_group_id"]` (keep the
-     campaign/ad-group ids - the apply skills need them to target; add `ad_campaign_name`
-     for readability)
+   - `groupBy`: `["ad_search_term", "ad_keyword", "ad_keyword_id", "ad_match_type",
+     "ad_keyword_status", "ad_campaign_id", "ad_campaign_status", "ad_group_id"]` (keep
+     the campaign/ad-group ids - the apply skills need them to target; add
+     `ad_campaign_name` / `ad_group_name` for readability). One search term can match more
+     than one keyword in the same ad group (Amazon close variants: `trainer cleaning kit`
+     matched both `trainer cleaning kit` and `trainers cleaning kit`), so a term may come
+     back as several rows: sum them per term for the money, keep the keyword rows for the
+     own-keyword check.
    - `aggregations` sum: `ad_spend`, `ad_clicks`, `ad_orders`, `ad_sales`
    - filter `ad_campaign_type = SPONSORED_PRODUCTS`.
    - Two exports: (a) sorted by the spend alias `DESC`, `limit` 5,000 CSV, for the top
@@ -113,15 +143,29 @@ modifier you checked in the recommendation.
    ACoS = spend / sales (guard sales=0), orders. First set aside ASIN-target terms
    (`b0...` strings) as competitor targeting, not waste. Then bucket: dead (orders=0,
    clicks >= ~10), bleeder (ACoS > break-even; split barely-over -> trim vs hard -> negate),
-   ok. Sum wasted = dead spend + overspend on bleeders.
+   ok. Sum wasted = dead spend + overspend on bleeders. Then the two guards on the dead and
+   hard buckets: **own keyword** - any row where the normalised term equals `ad_keyword`
+   with a positive match type moves to the "Own keyword" group (recommend pause / lower
+   bid via the bid optimizer, with the `ad_keyword_id`; if `ad_keyword_status` is PAUSED
+   already, recommend nothing); **paused** - rows whose `ad_campaign_status` on the latest
+   date is not ENABLED are marked `(paused)` now; ad-group state follows in step 6b.
 5. (Optional) pull `amazon_ads_targeting_by_campaign_by_date` for the keyword-level
    view (which bid keyword each wasteful term maps to). Current bids for a cut come
    from the bid-optimizer skill via `AMAZON_ADS_TARGETS_FIND`, not this table.
 6. For each campaign you would cut or negate, pull placement performance, the raw
    campaign bid adjustments, and `amazon_ads_audiences_by_date` as in the modifier
    checks above. Name the placement or audience that should be left alone.
-7. Render, biggest spend first. Hand the dead terms to `ppc-negative-keyword-applier`
-   and the bleeders to `ppc-bid-optimizer-apply`, with the modifier note attached.
+6b. **Resolve ad-group state** for every ad group in the dead and hard buckets:
+   `exports_create` on `amazon_ads_ad_groups_raw` (`ad_group_id`, `ad_group_state`,
+   `ad_campaign_id`), filter `ad_group_id in (...)` (and `amazon_ads_campaigns_raw` for
+   `ad_campaign_state` if `ad_campaign_status` was not pulled). Both are 72-hour
+   snapshots - say so. Mark rows `(paused)` when the campaign or the ad group is not
+   ENABLED, add the line "of which in paused campaigns or ad groups: {cur}{x} (not
+   actionable)", and drop them from the hand-off lists. The headline total stays as
+   measured; the actionable figure is the live subset.
+7. Render, biggest spend first. Hand the dead terms - **live campaigns and ad groups only,
+   own keywords removed** - to `ppc-negative-keyword-applier`, and the bleeders plus the
+   own-keyword rows to `ppc-bid-optimizer-apply`, with the modifier note attached.
 
 ## Output format
 
@@ -130,15 +174,22 @@ Wasted Ad Spend - {marketplace} - last {N} days   (full set paginated)
 Total wasted: {cur}{wasted}  ({dead} dead + {bleed} over break-even)  ACoS target {t}%
 
 Dead spend (no orders)
-term                      spend    clicks   campaign / ad group
-{term}                    {cur}..  {n}      {campaign} / {group}
+term                      spend    clicks   campaign / ad group              state
+{term}                    {cur}..  {n}      {campaign} / {group}             live
+{term}                    {cur}..  {n}      {campaign} / {group}             (paused)
 
 Bleeders (ACoS > {t}%)
 term                      spend    sales    ACoS   action
 {term}                    {cur}..  {cur}..  {a}%   trim bid / negate (>100%)
 
+Own keyword (the ad group's own bid keyword - pause or lower the bid, never negate)
+term = keyword            spend    clicks   campaign / ad group              keyword id
+{term}                    {cur}..  {n}      {campaign} / {group}             {ad_keyword_id}{, already paused}
+
+Of which in paused campaigns or ad groups: {cur}{x} (not actionable)
 Excluded (ASIN-target terms, not junk): {count}
-Next: dead terms -> ppc-negative-keyword-applier · bleeders -> ppc-bid-optimizer-apply.
+Hand-off: {n} dead terms (live, not own keywords) -> ppc-negative-keyword-applier ·
+{m} bleeders + {k} own keywords -> ppc-bid-optimizer-apply.
 ```
 
 ## Worked example (illustrative)
@@ -162,6 +213,10 @@ opposite decisions - the skill separates the two.
 - Did I set aside ASIN-target (`b0...`) terms as competitor targeting, not waste?
 - Did I split bleeders into bid-trim (barely over) vs negate (hard, 100%+)?
 - Did I compute ACoS and the bleeder split client-side (ratios are never summed)?
+- Did I separate own-keyword terms (term == `ad_keyword`, positive match type) from the
+  negatives and route them to the bid optimizer?
+- Did I exclude paused campaigns and ad groups from the negatives hand-off, report their
+  subtotal, and say the raw state tables are 72-hour snapshots?
 
 ## Common mistakes
 
@@ -176,11 +231,16 @@ opposite decisions - the skill separates the two.
   table is empty for some marketplaces; say the check was skipped.
 - Negating ASIN-target (`b0...`) terms - that's competitor targeting, not junk.
 - Negating a barely-over bleeder that converts in volume - trim its bid instead.
+- Negating a term that is the ad group's own bid keyword - that silences the keyword
+  without anyone seeing why. Pause or lower it instead (bid optimizer, `ad_keyword_id`).
+- Recommending a negative inside a paused campaign or ad group - it validates and does
+  nothing. Check state first; the applier confirms it live before writing.
 
 ## Notes
 
 - Read-only (analysis). The write follow-ups are separate skills: dead terms ->
   `ppc-negative-keyword-applier`, bleeders -> `ppc-bid-optimizer-apply` (each dryRun-gated).
-  Pass `ad_campaign_id` / `ad_group_id` through - both apply skills need them to target.
+  Pass `ad_campaign_id` / `ad_group_id` through - both apply skills need them to target -
+  and pass `ad_keyword_id` for own-keyword rows so the bid optimizer can act on them.
 - A DataDoe skill, built on the DataDoe Search Term Performance source
   (`amazon_ads_search_terms_by_campaign_by_date`).
