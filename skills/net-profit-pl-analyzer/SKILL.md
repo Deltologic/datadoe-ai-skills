@@ -92,23 +92,22 @@ Work top-down, then find the leaks:
    - `aggregations` (sum): `total_sales`, `profit`, `total_cost`, `ad_spend`,
      `total_fees`, `cogs_total`, `total_units_sold`
    Do NOT sum `acos` / `tacos` / `roi`. Recompute margin as profit / sales.
-4. **SKU ranking - two exports, winners and leaks:** `exports_create` on
-   `amazon_profit_by_sku_and_date` for the same window, twice with the same shape:
+4. **SKU ranking - one complete per-SKU aggregate:** `exports_create` on
+   `amazon_profit_by_sku_and_date` for the same window:
    - `groupBy`: `["sku","product_name","currency"]`
    - `aggregations` (sum): `total_sales`, `profit`, `total_cost`, `ad_spend`,
      `total_fees`, `cogs_total`, `total_units_sold` - give each a **distinct alias**
      (e.g. `sum(profit) as profit_sum`, never `as profit`, which errors `ALIAS_COLLISION`).
-   - **4a Winners:** `orderByColumn` the profit-sum alias (`profit_sum`), `DESC`; `limit` ~200.
-   - **4b Leaks:** same `groupBy`/`aggregations`, but `having profit_sum < 0` (`having` is
-     supported) or `orderByColumn profit_sum ASC`; `limit` ~200. The leaks (step 9) and the
-     settlement-lag guard (step 8) read from **this** export, never from 4a: on a large
-     account the DESC list cannot contain a single loss-making SKU (observed: 2,932 SKUs in
-     a month, the top 1,000 by profit had no negatives while the bottom 300 were all
-     negative and summed to about 4x the account loss).
-   - **Ranking limit:** if the account has more than ~200 SKUs, say that the top-200 list
-     is a subset of the catalogue and that leaks come from the 4b export, not from the
-     tail of 4a. Caps: JSON returns at most 1,000 rows, CSV 5,000; use `skip` to page if
-     either list is cut.
+   - CSV, `limit 5000`, `orderByColumn sku`; page with `skip` until a page returns fewer
+     rows (caps: JSON 1,000 rows, CSV 5,000). Drop rows whose `sku` is null (account-only
+     ad rows). Rank the winners and evaluate every leak rule (step 9) on this full set in
+     code.
+   - Do not pull a top-N or bottom-N instead. A DESC list cannot contain a loss on a large
+     account (2,932 SKUs in a month: the top 1,000 by profit had no negatives). A `having
+     profit_sum < 0` / ASC list holds only losses, so it never shows a profitable SKU whose
+     margin is under the floor or whose ad spend exceeds its profit - on one UK month that
+     was 770 profitable SKUs under the 15% floor (153 of them with ad spend above profit),
+     GBP 138k of sales, beside 999 loss-making SKUs.
    Do NOT sum `acos` / `tacos` / `roi` (they are ratios) - recompute them from the summed
    columns if needed (e.g. margin % = profit / sales).
 5. If COGS looks wrong, `exports_create` on `amazon_cogs` and read `cost_currency`,
@@ -129,13 +128,17 @@ Work top-down, then find the leaks:
    not. Use `cogs_present`, not `sum(cogs_total) = 0`, for this gate.
 8. **Settlement-lag guard (recent windows):** fees post on settlement cycles, so a fresh SKU
    can show fees > sales (or fees with ~no sales) - a timing artifact, not a real loss. Run
-   this check over the step-4b leaks export and flag any SKU whose fee/sales ratio is
+   this check over the leak candidates from the step-4 set and flag any SKU whose fee/sales ratio is
    implausible in a short window as "settlement lag - recheck after settlement" rather than
    a real leak.
-9. Headline numbers come from step 3 only. Flag SKU leaks from the step-4b export: `profit < 0`,
-   `ad_spend` above profit, or SKU margin < 0.5x the account margin. When the account margin
+9. Headline numbers come from step 3 only. Flag SKU leaks from the full step-4 set,
+   profitable SKUs included: `profit < 0`, `ad_spend` above profit, or SKU margin < 0.5x
+   the account margin. When the account margin
    is <= 0 or degenerate (COGS missing, loss-making window), use an **absolute ~15% margin
    floor** instead of the 0.5x multiple - a multiple of a negative baseline is meaningless.
+   List leaks by money at stake - the loss for negative SKUs, the shortfall to the floor
+   (`floor x sales - profit`) for thin ones - give the count per rule, and on a large
+   catalog show the top ones and say how many more there are.
    Say that SKU ad spend omits Sponsored Brands and other campaign types that are in the
    account `ad_spend`.
 10. Render the card.
@@ -153,7 +156,7 @@ Top profit SKUs
 1  {sku}                      {cur}..   {cur}..   {m}%     {cur}..
 ...
 
-Profit leaks (fix first)   (from the step-4b having/ASC export; top list above is a subset when > ~200 SKUs)
+Profit leaks (fix first)   ({n} losses · {t} under the margin floor · {a} ad spend > profit - full SKU set; top {k} by money shown)
 - {sku}: {why - negative profit / ad spend > margin / net margin < 15%}
   -> {action: raise price / cut bid / check COGS / discontinue}
 Settlement-lag (recheck, not real losses): {sku(s) with fees > sales in an unsettled window}
@@ -177,8 +180,9 @@ settlement-lag timing artifacts), is the point.
 - Did the headline come from `amazon_profit_by_date`, not a sum of SKU profit?
 - Did I rank SKUs by profit, not sales?
 - Did I recompute margin/ACoS from summed columns (never sum a ratio)?
-- Did I pull leaks from the step-4b `having`/ASC export, not from the tail of the top-200
-  DESC list (which cannot contain a loss-making SKU on a large account)?
+- Did I evaluate every leak rule on the complete, paged per-SKU aggregate, so profitable
+  SKUs under the margin floor or with ad spend above profit are flagged too, not only
+  losses?
 - Did I sanity-check suspiciously high margins for missing COGS - and check the sign of
   `fees_sum` first (negative = fee reversals / reimbursements, not missing COGS)?
 - Did I run the dedicated `cogs_present` export (share of sales with COGS) and lead with a
@@ -200,8 +204,10 @@ settlement-lag timing artifacts), is the point.
 - Treating a 99% margin as real - usually COGS was not uploaded, or `cost_currency`
   is not the marketplace currency, or `fees_sum` is negative (fee reversals posted
   without matching sales).
-- Reading leaks off the top-200 DESC export - on a large account it holds no negative
-  SKU at all; leaks come from the `having profit_sum < 0` / ASC export (step 4b).
+- Reading leaks off a top-N or bottom-N export - a DESC list holds no loss on a large
+  account, and a `having profit_sum < 0` / ASC list holds only losses, missing every
+  profitable SKU under the margin floor (770 on one UK month, GBP 138k of sales). Evaluate
+  the rules on the full paged SKU set.
 - Trying to aggregate `cogs_present` in the grouped SKU export - it is a LOGIC column
   (`INVALID_AGGREGATE`); use the dedicated `groupBy [cogs_present, currency]` export.
 - Ignoring ad spend - a SKU can be profitable before ads and a loss after. SKU
