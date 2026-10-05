@@ -43,10 +43,10 @@ restock_recommendations. -->
    recent velocity (real 30-day units sold, cross-checked against
    `amazon_profit_by_sku_and_date` - see workflow) and little/no inbound. Losing sales
    right now. Top priority.
-2. **Imminent** - inbound-aware days of supply (`days_of_supply` on inventory health;
-   `total_days_of_supply_including_units_from_open_shipments` on the fallback, or
-   `alert = low_stock`) below your lead time (default 30d) - on-hand + inbound won't cover
-   it in time.
+2. **Imminent** - inbound-aware days of supply
+   (`total_days_of_supply_including_units_from_open_shipments` on both sources - inventory
+   health's `days_of_supply` counts on-hand FBA stock only; or `alert = low_stock` on the
+   fallback) below your lead time (default 30d) - on-hand + inbound won't cover it in time.
 3. **Covered** - healthy days of supply (fallback: `alert = ""`). Skip.
 Order by severity, then fewest days of supply. Attach Amazon's recommended ship-in
 quantity and date - but sanity-check the quantity against real 30-day velocity first (an
@@ -57,9 +57,13 @@ implausible reco is noise, not a signal).
 - MCP base: `https://mcp.datadoe.com/mcp/v1`
 - **Primary source:** `FBA Inventory Health` (`amazon_fba_inventory_health`) **[premium]**.
   Daily snapshot - use the latest `date`. Columns: `sku`, `child_asin`, `product_name`,
-  `available`, `inbound_quantity`, `days_of_supply`, `units_shipped_t30`,
+  `available`, `inbound_quantity`, `days_of_supply`,
+  `total_days_of_supply_including_units_from_open_shipments`, `units_shipped_t30`,
   `units_shipped_t7`, `recommended_ship_in_quantity`, `recommended_ship_in_date`,
-  `fba_inventory_level_health_status`. Not available in MX.
+  `fba_inventory_level_health_status`. Not available in MX. `days_of_supply` is on-hand
+  FBA stock at recent sales; `total_days_of_supply_including_units_from_open_shipments`
+  adds inbound (one UK snapshot: higher on 611 of 802 SKUs with inbound, equal where
+  inbound is 0) - rank "imminent" on the second.
   **Emptiness guard:** Premium note: a premium export costs 5 AI Tokens instead of 2 - nothing else differs, and the table is part of the always-on default dataset, so it is never disabled. A 0-row export means no data in the window or an initial load still in progress - say which, and switch to the fallback below ("FBA Inventory Health returned no rows (initial load may still be running) - using Amazon's restock recommendations instead"); never render zeros.
   Never render an empty catalog as "nothing to restock".
 - **Fallback source:** `FBA Restock Recommendations` (`amazon_fba_restock_recommendations`,
@@ -88,15 +92,23 @@ implausible reco is noise, not a signal).
 2. `exports_sources_get` (query "inventory health") -> check `amazon_fba_inventory_health`.
    If `enabled: false`, go straight to the fallback (step 3b). Also check
    `amazon_fba_restock_recommendations` and `amazon_profit_by_sku_and_date`.
-3. **a) Primary:** `exports_create` for `amazon_fba_inventory_health`, latest snapshot
-   (`from` = `to` = the latest date; a 2-day range returns two snapshots), filter
-   `marketplace_country_code = <marketplace>`, columns as listed above. **Row caps are
-   1,000 (JSON) / 5,000 (CSV)** and a catalog can exceed them (7,554 rows here), so do not
-   rely on sorting: `days_of_supply ASC` puts the nulls first and truncation keeps the
-   wrong rows. Pull the urgent sets server-side instead - (i) `available = 0 AND
-   units_shipped_t30 > 0` (out now), (ii) `days_of_supply notNull AND days_of_supply <
-   <lead time>` (imminent) - and paginate with `skip` if a page fills to `limit`. **If the
-   export returns 0 rows, treat the table as unavailable and run step 3b.**
+3. **a) Primary:** two exports on `amazon_fba_inventory_health`.
+   - **Availability and snapshot date:** `from` = 3 days ago, `to` = today, `groupBy
+     ["date", "marketplace_country_code"]`, `count(sku)`, no other filter. **No row for
+     the marketplace means the table is unavailable** (no data yet, or an initial load
+     still running) - run step 3b and say so. Otherwise the newest `date` is the snapshot
+     (a 2-day range would return two snapshots).
+   - **The whole snapshot, classified in code:** `from` = `to` = that date, filter
+     `marketplace_country_code = <marketplace>`, columns as listed above, CSV `limit
+     5000`, `orderByColumn sku`, and page with `skip` until a page returns fewer rows
+     (**row caps are 1,000 JSON / 5,000 CSV**; 7,560 rows = 2 pages on one UK account).
+     Do not pre-filter to "urgent" rows: a null `days_of_supply` (2,009 of those 7,560
+     rows) or a zero-stock row whose Amazon velocity reads 0 can still be selling per the
+     profit table, and step 5 can only rescue rows it receives - 25 SKUs on that snapshot
+     had under 30 days of cover by real sales and a null `days_of_supply`. A pre-filtered
+     export that returns 0 rows also proves nothing about the table being available. Do
+     not rely on sorting either: `days_of_supply ASC` puts the nulls first and a
+     truncated page keeps the wrong rows.
    **b) Fallback:** `exports_create` for `amazon_fba_restock_recommendations`, columns:
    `sku`, `child_asin`, `product_name`, `available`, `inbound`,
    `days_of_supply_at_amazon_fulfillment_network`,
@@ -106,7 +118,9 @@ implausible reco is noise, not a signal).
    Configuration). Same row caps; pull `alert IN (out_of_stock, low_stock)` server-side,
    then sort by `alert` (out_of_stock first) and
    `total_days_of_supply_including_units_from_open_shipments` ASC; paginate if a page
-   fills to `limit`. Say in the output which source the ranking is built on.
+   fills to `limit`. Say in the output which source the ranking is built on, and that
+   this fallback trusts Amazon's `alert`: a SKU Amazon marks healthy never reaches the
+   velocity cross-check.
 4. Poll, download, and **collapse to `MAX(date)` per SKU** so you rank on one current
    snapshot, not a mix of days. Record the snapshot date; flag the lag if it is well behind
    today.
@@ -115,29 +129,35 @@ implausible reco is noise, not a signal).
      `amazon_profit_by_sku_and_date` (a premium export, 5 AI Tokens) and use it as the authoritative
      velocity. Treat a SKU as dead stock (skip it) only if BOTH sources show no sales; if
      the profit table shows sales, it is a live seller regardless of the inventory table.
-   - If days-of-supply is null/empty (slow or near-zero SKUs often are): daily velocity =
-     (cross-checked 30-day units, else `units_shipped_t30`) / 30; days left =
-     `available / velocity`.
+   - If the inbound-inclusive days of supply is null/empty (slow, new or near-zero SKUs
+     often are): daily velocity = (cross-checked 30-day units, else `units_shipped_t30`) /
+     30; on-hand days = `available / velocity`; inbound-inclusive days = `(available +
+     inbound_quantity) / velocity` (fallback: `inbound`). Bucket on the inbound-inclusive
+     days like every other row and show the on-hand days beside it - inbound that lands
+     after the on-hand days run out still leaves a gap.
+   - A zero-stock row whose Amazon velocity reads 0 but whose profit-table sales are real
+     is **out now** (when inbound is little or none), not dead stock.
    - Sanity-check the recommended quantity (`recommended_ship_in_quantity` /
      `recommended_replenishment_qty`) against the cross-checked velocity: a reco wildly out
      of line (e.g. a 4,000-unit reco on a SKU truly selling ~0) is flagged "verify against
      sales velocity", not surfaced blindly. Prefer Amazon's reco when it is plausible.
    - The recommended ship date is frequently null (100% null on the fallback source in
      testing) - render "n/a", do not imply a date exists; drive urgency off days-of-supply.
-6. Bucket (out-now / imminent / covered) via days-of-supply + inbound (+ `alert` on the
-   fallback source), and render most urgent first.
+6. Bucket (out-now / imminent / covered / dead) on the inbound-inclusive days of supply
+   (step 5 computes it when null) plus `alert` on the fallback source, and render most
+   urgent first.
 
 ## Output format
 
 ```
 Restock Priority - {marketplace} - snapshot {date} {STALE if lagging}   (lead time {L}d)
-Source: FBA Inventory Health | FBA Restock Recommendations (fallback - inventory health not in plan)
+Source: FBA Inventory Health | FBA Restock Recommendations (fallback - inventory health returned no rows)
 
 OUT NOW (available 0 / alert out_of_stock, losing sales)
 SKU                     avail  30d-sold  inbound  ship-in   by        qty check
 {sku}                   0      {n}       {n}      {qty}     {date}    ok / verify vs velocity
 
-IMMINENT (DoS < {L}d / alert low_stock)
+IMMINENT (DoS incl. inbound < {L}d / alert low_stock)
 SKU                     avail  DoS   30d-sold  inbound  ship-in  by
 {sku}                   {n}    {d}   {n}       {n}      {qty}    {date}
 
@@ -158,18 +178,20 @@ That inbound-aware ranking is the point: at-zero alone isn't the trigger; at-zer
 
 ## Quality self-check
 
-- Did I check `amazon_fba_inventory_health` for `enabled` and for 0 rows, and fall back to
-  `amazon_fba_restock_recommendations` (saying so) instead of reporting "nothing to restock"?
+- Did I check availability with an unfiltered count on the latest dates (never with a
+  filtered export), and fall back to `amazon_fba_restock_recommendations` (saying so)
+  instead of reporting "nothing to restock"?
 - Did I collapse to `MAX(date)` per SKU and state the snapshot date (and flag it if stale)?
-- Did I rank on days-of-supply + inbound (subtract inbound before crying "stockout")?
+- Did I rank on the inbound-inclusive days of supply
+  (`total_days_of_supply_including_units_from_open_shipments`, not `days_of_supply`)?
 - Did I fall back to 30-day velocity when days-of-supply is null, and skip no-velocity
   dead stock (don't restock a non-seller)?
 - Did I sanity-check the recommended quantity against velocity before surfacing it?
 - Did I judge velocity per `child_asin` (sibling SKUs of a live ASIN read 0 on their own)
   using `amazon_profit_by_sku_and_date` where available?
 - Did I filter `country` / `marketplace_country_code` to the seller's marketplace?
-- Did I pull the urgent sets server-side (and paginate) instead of trusting a sorted
-  5,000-row page?
+- Did I page through the whole latest snapshot and classify in code, so null-DoS and
+  zero-velocity rows reach the velocity cross-check?
 
 ## Common mistakes
 
@@ -180,7 +202,12 @@ That inbound-aware ranking is the point: at-zero alone isn't the trigger; at-zer
 - Ignoring null days-of-supply instead of computing from velocity.
 - Using a stale snapshot (multiple dates) - collapse to MAX(date), and flag the lag.
 - Trusting one sorted page on a multi-thousand-SKU catalog - caps are 1,000 JSON / 5,000
-  CSV and `days_of_supply ASC` sorts nulls first; filter the urgent sets server-side.
+  CSV and `days_of_supply ASC` sorts nulls first; page through the whole snapshot.
+- Pre-filtering the inventory export to "urgent" rows - null-DoS and zero-velocity rows
+  never reach the velocity cross-check, and an empty urgent set looks like an unavailable
+  table.
+- Treating `days_of_supply` as inbound-aware - it counts on-hand stock only; rank on
+  `total_days_of_supply_including_units_from_open_shipments`.
 - Forgetting the `country` filter on `amazon_fba_restock_recommendations` - a UK ranking
   built from DE/ES/FR rows.
 - Surfacing Amazon's recommended quantity blindly - sanity-check it against real velocity

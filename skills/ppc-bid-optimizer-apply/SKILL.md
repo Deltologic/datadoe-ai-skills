@@ -52,7 +52,11 @@ guardrails below.
 - MCP base: `https://mcp.datadoe.com/mcp/v1`
 - Read (performance), preferred when the org has it: `amazon_ads_profit_by_target_and_date`
   [premium] - per target/day: `action_target_id` (the Ads `targetId`, ready for the UPDATE
-  payload), `ad_keyword_bid`, `estimated_break_even_acos` (compare actual ACoS against it
+  payload), `ad_campaign_type` (the table also holds Sponsored Brands, Display and
+  Television targets - filter to `SPONSORED_PRODUCTS`), `ad_campaign_id` / `ad_group_id`
+  (the UPDATE scope - keep them when grouping), `target_entity_type` (`KEYWORD` /
+  `PRODUCT_OR_AUTO_TARGET`), `ad_target_bid` (latest fetched bid, keyword or target),
+  `ad_keyword_bid` (bid recorded in the report, can be stale), `estimated_break_even_acos` (compare actual ACoS against it
   instead of a flat target when available), `is_attribution_mature` (skip rows where it is
   false instead of guessing a 7-day cut-off). Premium note: a premium export costs 5 AI Tokens instead of 2 - nothing else differs, and the table is part of the always-on default dataset, so it is never disabled. A 0-row export means no data in the window or an initial load still in progress - say which, and fall back to the source below; never render zeros.
   Note: `estimated_break_even_acos` is null when the account has no COGS uploaded - then
@@ -70,9 +74,10 @@ guardrails below.
   seller or vendor account. Set access level to Read and write". Fallback without it:
   `amazon_ads_profit_by_target_and_date.action_target_id` is the Ads `targetId` (for
   Sponsored Products it equals `ad_keyword_id` on keyword rows and `ad_target_id` on
-  auto/product rows), with `ad_keyword_bid` / `ad_target_bid` as the bid - flag those bids
-  as table-sourced (up to a day stale). The real risk is a stale bid or the wrong
-  campaign/ad group, not a different id.
+  auto/product rows), with `ad_target_bid` as the bid (else `ad_keyword_bid`) and
+  `ad_campaign_id` / `ad_group_id` from the same grouped export (step 2) as the scope -
+  flag those bids as table-sourced (up to a day stale). The real risk is a stale bid or
+  the wrong campaign/ad group, not a different id.
 - Write: `AMAZON_ADS_TARGETS_UPDATE` action, gated behind a `dryRun` step. Confirmed
   payload shape (max **25** targets per action - schema `maxItems: 25`; split longer lists):
   ```
@@ -99,9 +104,15 @@ guardrails below.
 ## Step-by-step workflow (MCP-native)
 
 1. `sellers_and_vendors_list` -> pick the seller.
-2. **Performance:** prefer `amazon_ads_profit_by_target_and_date` (premium export, 5 AI Tokens) when it has rows
-   (filter `is_attribution_mature = true`, group by `action_target_id`, sum spend/sales/
-   clicks/orders, `max(ad_keyword_bid)`). Otherwise `exports_create` on
+2. **Performance:** prefer `amazon_ads_profit_by_target_and_date` (premium export, 5 AI Tokens) when it has rows:
+   filter `is_attribution_mature = true` **and `ad_campaign_type = SPONSORED_PRODUCTS`**
+   (one UK month held 235 Sponsored Brands and 3 Display targets beside the Sponsored
+   Products ones, and the FIND / UPDATE below are Sponsored Products only); `groupBy
+   ["action_target_id", "target_entity_type", "ad_campaign_id", "ad_group_id",
+   "ad_keyword", "ad_match_type"]` (the campaign and ad-group ids are required in the
+   UPDATE payload and by the table-sourced fallback); sum spend/sales/clicks/orders with
+   distinct aliases; `max(ad_target_bid)` and `max(ad_keyword_bid)` - use the first as the
+   table bid and fall back to the second when it is null. Otherwise `exports_create` on
    `amazon_ads_search_terms_by_campaign_by_date`, trailing 30-60d but **ending ~7 days
    ago** (exclude the last 7 days - SP sales/orders are 7-day attributed, so a fresh window
    under-counts conversions). `groupBy` `[ad_keyword_id, ad_keyword, ad_match_type,
@@ -149,6 +160,8 @@ actionId: null`) even when Actions are disabled - so the preview is always safe 
 
 - Did I take `targetId` + bid from FIND, or - when FIND was refused for access level - from
   `action_target_id` with the bids flagged as table-sourced?
+- Did I filter the target-profit export to Sponsored Products and keep `ad_campaign_id` /
+  `ad_group_id` in its `groupBy`, so every proposed update has a valid SP scope?
 - Did I exclude ~the last 7 days so 7-day attribution didn't trigger over-aggressive cuts?
 - Did I skip keywords with < 5 clicks, cap the step at +/-30%, and floor at 0.02?
 - Did I split the batch so no action carries more than 25 targets?
@@ -160,6 +173,10 @@ actionId: null`) even when Actions are disabled - so the preview is always safe 
 ## Common mistakes
 
 - Slashing a bid to zero on one bad week (over-correction).
+- Reading `amazon_ads_profit_by_target_and_date` without an `ad_campaign_type` filter, or
+  grouping it by `action_target_id` alone - Brands and Display targets get proposed as
+  Sponsored Products updates, and the table-sourced fallback has no campaign / ad group to
+  build the payload from.
 - Raising bids on high-ACoS "converting" keywords (they're still unprofitable).
 - Sending the bid to `ad_keyword_id` instead of the FIND-resolved `targetId` - it lands
   on the wrong target (or nothing).
