@@ -120,8 +120,12 @@ the top spenders.
      "ad_campaign_id", "ad_group_id", "ad_keyword", "ad_keyword_id", "ad_match_type",
      "ad_keyword_status", "ad_campaign_status"]` (+ `ad_campaign_name` / `ad_group_name`
      for the report), the same sums plus `max(date) as last_seen`, filter `ad_group_id in
-     (...)` for the candidate ad groups from (a); page with `skip` if a page fills. Join to
-     (a) on `(ad_campaign_id, ad_group_id, ad_search_term)`.
+     (...)` for the candidate ad groups from (a); page with `skip` if a page fills. It
+     returns every term in those ad groups (1,647 rows for three ad groups on one UK
+     account); to shrink it, also filter `ad_search_term in (...)` for the candidate terms
+     - the `in` value is a comma-separated list, so a term that itself contains a comma
+     needs its own `=` filter. Join to (a) on `(ad_campaign_id, ad_group_id,
+     ad_search_term)`.
 4. Poll, download, and apply the wasteful rule above to (a) - dead candidates are the rows
    with `orders_sum = 0` and enough spend; rows with spend above CPA and a few orders go to
    "review". **Own-keyword guard:** drop every candidate whose normalised term equals
@@ -143,8 +147,10 @@ the top spenders.
    - **Read that snapshot only:** `from` = `to` = that date, filter `ad_campaign_type =
      SPONSORED_PRODUCTS` and `ad_campaign_id in (...)` for the candidates' campaigns,
      columns `date`, `ad_campaign_id`, `ad_group_id`, `ad_keyword_text`, `ad_match_type`,
-     `ad_keyword_state`, CSV, page with `skip` if a page fills, then keep the rows with
-     `ad_keyword_state = ENABLED`.
+     `ad_keyword_state`, CSV, page with `skip` until a page returns fewer rows, then keep
+     the rows with `ad_keyword_state = ENABLED`. Even filtered to the candidates' campaigns
+     this can run to thousands of rows (14,965 for 27 campaigns on one UK account - three
+     CSV pages); dedupe only after reading every page.
    Drop every candidate whose lower-cased term already exists for the same `ad_campaign_id`
    + `ad_group_id` (match on `ad_campaign_id` + term alone when `ad_group_id` is null - it
    is null for Sponsored Products rows before 2026-07-01). Report the skipped count as
