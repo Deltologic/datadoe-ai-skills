@@ -157,7 +157,11 @@ modifier you checked in the recommendation.
      "ad_keyword", "ad_keyword_id", "ad_match_type", "ad_keyword_status",
      "ad_campaign_status"]` (+ `ad_campaign_name` / `ad_group_name` if wanted), the same
      sums plus `max(date) as last_seen`, filter `ad_group_id in (...)` for the candidates'
-     ad groups, CSV, page with `skip` if a page fills. Join it to the candidates on
+     ad groups, CSV, page with `skip` if a page fills. It returns every term in those ad
+     groups (1,647 rows for three ad groups on one UK account); to shrink it, also filter
+     `ad_search_term in (...)` for the candidate terms - the `in` value is a
+     comma-separated list, so a term that itself contains a comma needs its own `=`
+     filter. Join it to the candidates on
      `(ad_campaign_id, ad_group_id, ad_search_term)`. One term often comes back as several
      rows here (Amazon close variants: `trainer cleaning kit` matched both `trainer
      cleaning kit` and `trainers cleaning kit`); that is expected - these rows feed only
