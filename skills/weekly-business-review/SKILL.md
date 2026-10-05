@@ -47,10 +47,12 @@ sales-only snapshot use the **Weekly Sales Briefing** instead. Live from DataDoe
 3. **Explain the anomaly - and check it's real.** If margin or TACoS deviates
    materially from baseline (e.g. > 5pp), decompose *why* using the cost columns as
    % of sales - `sales_tax` % (VAT, ~16.7% of sales on UK/EU accounts; 0 on US/CA),
-   total fees % (of which FBA % and referral %), COGS %, ad %, `refund_cost` %. The
-   lines sum to 100% - margin, so the decomposition reconciles only with `sales_tax`
-   in it; omit it and a UK review infers a +16.7% margin where the real one is
-   negative. Name the driver. **Then apply the
+   total fees % (of which FBA % and referral %), COGS %, ad %, refunds %. Refunds % is
+   `-refund_cost / total_sales`: `refund_cost` is signed and *added* to profit (refund
+   outflows negative, fee reversals positive), so its cost-side share is its negative -
+   a -10 refund contribution on 100 of sales is +10% of costs. The lines sum to 100% -
+   margin, so the decomposition reconciles only with `sales_tax` and the refunds line in
+   it; omit VAT and a UK review infers a +16.7% margin where the real one is negative. Name the driver. **Then apply the
    settlement-timing test:** Amazon books fees on *settlement date*, not sale date,
    so `profit_by_date` weekly margin is lumpy - a fee spike concentrated in 1-2 weeks
    on otherwise-flat sales is usually a settlement batch, not a real cost increase.
@@ -112,8 +114,8 @@ sales-only snapshot use the **Weekly Sales Briefing** instead. Live from DataDoe
    once on `amazon_profit_by_date`, the last ~63 days plus a few days of slack (8 weeks of
    trend + the 4 baseline weeks), `groupBy [date, currency]`, sum `total_sales`, `profit`,
    `ad_spend`, `cogs_total`, `total_fees`, `fba_fees`, `total_selling_fees`, `sales_tax`,
-   `total_units_sold` with distinct aliases (`sum(profit) as profit_sum`; `as profit` errors
-   `ALIAS_COLLISION`). This single export feeds steps 3-7; do not add `dateInterval WEEK`
+   `refund_cost`, `total_units_sold` with distinct aliases (`sum(profit) as profit_sum`,
+   `sum(refund_cost) as refund_cost_sum`; `as profit` errors `ALIAS_COLLISION`). This single export feeds steps 3-7; do not add `dateInterval WEEK`
    (see Configuration). On the profit sources the completeness signal is **daily sales
    value, NOT row count** - rows backfill (all SKUs appear at ~full count) before the
    sales/profit values settle, so a day can pass a row-count test yet hold only a fraction
@@ -142,7 +144,8 @@ sales-only snapshot use the **Weekly Sales Briefing** instead. Live from DataDoe
    buckets whose newest bucket includes the partial current day and whose oldest is
    clipped by `from`, and it cannot be anchored to the last complete day. Carry the fee
    decomposition columns (`total_fees`, `fba_fees`, `total_selling_fees`, `cogs_total`,
-   `sales_tax`, `ad_spend`) through the same buckets so step 7 can read them.
+   `sales_tax`, `ad_spend`, `refund_cost`) through the same buckets so step 7 can read
+   them.
 5. **Effective-days guard (both weeks).** For "this week" and "last week", compute
    **effective days** = count of days present at/above the threshold. If a week has < 7
    effective days, either normalize the comparison per effective day OR mark that week
@@ -159,7 +162,8 @@ sales-only snapshot use the **Weekly Sales Briefing** instead. Live from DataDoe
 7. **Anomaly drill:** if this week's (or a recent week's) margin/TACoS is > ~5pp off
    baseline, express each cost as % of sales per week - `sales_tax`% (VAT; 0 on US/CA),
    total_fees% (of which fba_fees% and `total_selling_fees`% - subsets, never added on
-   top), COGS%, ad%, `refund_cost`% - and check they reconcile: the lines sum to
+   top), COGS%, ad%, refunds% = `-refund_cost_sum / sales_sum` (sign reversed - profit
+   adds the signed `refund_cost`) - and check they reconcile: the lines sum to
    100% - margin. Identify which line moved - that is the cause. Report it in plain words.
 8. **Movers (full per-SKU totals, diffed client-side).** `exports_create` twice on
    `amazon_profit_by_sku_and_date` - once for this week, once for last week (the windows
@@ -229,7 +233,9 @@ difference between a scary wrong number and a correct insight.
   week provisional rather than reporting a phantom drop?
 - Did I diff movers over full per-SKU pulls (CSV `limit 5000`, both weeks), not a top-200
   per week?
-- Does the cost mix include `sales_tax` % and reconcile to 100% - margin?
+- Does the cost mix include `sales_tax` % and the refunds line as `-refund_cost / sales`
+  (exported in step 3, carried through the weekly buckets), and reconcile to 100% -
+  margin?
 - Did I avoid averaging rate metrics (margin/TACoS) over a partial week?
 - Did I compare to the trailing baseline, not just last week (so a noisy prior week
   can't mislead)?
@@ -254,6 +260,9 @@ difference between a scary wrong number and a correct insight.
   the list; pull full per-SKU totals (CSV `limit 5000`) for both weeks and diff in code.
 - Decomposing costs without `sales_tax` - on UK/EU accounts VAT is ~16-17% of sales and
   the lines will not reconcile to the margin without it.
+- Using the raw signed `refund_cost` as the refunds share, or leaving it out of the step-3
+  export - profit adds `refund_cost`, so the cost line is `-refund_cost / sales`; with the
+  raw value or no value the mix cannot reconcile to the margin.
 - Reporting a partial/gappy week's drop as a real collapse - normalize by effective days
   or mark it provisional (check BOTH weeks; an under-counted prior week distorts the Δ too).
 - WoW-only headline: last week being abnormal makes this week look great/terrible.
