@@ -79,7 +79,9 @@ the top spenders.
   into several actions.
 - Dedupe source: `Negative Keywords` - `amazon_ads_negative_keywords` (source id
   `36596ff85e`): `ad_campaign_id`, `ad_group_id`, `ad_keyword_text`, `ad_match_type`,
-  `ad_keyword_state`. Weekly snapshot (`date` = Monday), `requiresDatePeriod: true`. Its
+  `ad_keyword_state`. Weekly snapshot (`date` = Monday), `requiresDatePeriod: true`; large
+  (about 34,800 Sponsored Products negatives per snapshot on one UK account), so always
+  read one snapshot filtered to the candidates' campaigns (step 5). Its
   `ad_match_type` is Amazon's reporting name (`NEGATIVE_EXACT` / `NEGATIVE_PHRASE`) - that
   is read-side naming only; the ADD payload still uses `EXACT` / `PHRASE` + `negative: true`.
 - **Match type is `EXACT` / `PHRASE` / `BROAD`** - never `NEGATIVE_EXACT` /
@@ -99,38 +101,69 @@ the top spenders.
 1. `sellers_and_vendors_list` -> pick the seller, keep `sellerOrVendorId`.
 2. `exports_sources_get` (query "search term") -> confirm `amazon_ads_search_terms_by_campaign_by_date` is
    `enabled`.
-3. `exports_create` for `amazon_ads_search_terms_by_campaign_by_date`, last 30-60 days, columns:
-   `ad_search_term`, `ad_keyword`, `ad_keyword_id`, `ad_match_type`, `ad_keyword_status`,
-   `ad_campaign_id`, `ad_campaign_name`, `ad_campaign_status`, `ad_campaign_type`,
-   `ad_group_id`, `ad_group_name`, `ad_spend`, `ad_sales`, `ad_orders`, `ad_clicks`. Filter
-   to `ad_campaign_type = SPONSORED_PRODUCTS`.
-4. Poll, download, aggregate by `ad_search_term` (+ campaign/ad group) for the money, but
-   keep the keyword rows: one term can match several keywords in one ad group (close
-   variants - `trainer cleaning kit` matched both `trainer cleaning kit` and `trainers
-   cleaning kit`). Apply the wasteful rule above. **Own-keyword guard:** drop every
-   candidate whose normalised term equals `ad_keyword` on any of its rows with a positive
-   match type, and list them under "Excluded: own keyword - route to bid optimizer" with
-   the `ad_keyword_id` (note "already paused" when `ad_keyword_status` is PAUSED). Observed
-   on a UK account: the top dead term was the exact keyword of its own ad group. Produce the
+3. Two `exports_create` calls on `amazon_ads_search_terms_by_campaign_by_date`, last
+   30-60 days, filter `ad_campaign_type = SPONSORED_PRODUCTS`, CSV. **Never export the
+   ungrouped daily rows and aggregate them yourself:** they run to tens of thousands
+   (86,082 Sponsored Products rows in 60 days on one UK account) against the 5,000-row CSV
+   cap, so each term would be judged on whatever fraction of its days fit on the page.
+   - **(a) Candidates, term grain:** `groupBy ["ad_search_term", "ad_campaign_id",
+     "ad_group_id"]`, sum `ad_spend`, `ad_clicks`, `ad_orders`, `ad_sales` with distinct
+     aliases (`spend_sum`, `clicks_sum`, `orders_sum`, `sales_sum`), `having clicks_sum >=
+     10`, sorted by `spend_sum DESC`, `limit` 5,000; page with `skip` until a page returns
+     fewer rows. This is the negative's own grain: a negative is added per ad group and
+     blocks the term for every keyword and target there, so zero orders must hold across
+     all of them. Never add keyword, status or name columns to this `groupBy` - one term
+     then splits into one row per matched keyword or target, and a term that converts
+     through another target looks dead (observed: 0 orders through an ASIN target, 22
+     through a category target, same ad group).
+   - **(b) Keyword detail, for the guards only:** `groupBy ["ad_search_term",
+     "ad_campaign_id", "ad_group_id", "ad_keyword", "ad_keyword_id", "ad_match_type",
+     "ad_keyword_status", "ad_campaign_status"]` (+ `ad_campaign_name` / `ad_group_name`
+     for the report), the same sums plus `max(date) as last_seen`, filter `ad_group_id in
+     (...)` for the candidate ad groups from (a); page with `skip` if a page fills. Join to
+     (a) on `(ad_campaign_id, ad_group_id, ad_search_term)`.
+4. Poll, download, and apply the wasteful rule above to (a) - dead candidates are the rows
+   with `orders_sum = 0` and enough spend; rows with spend above CPA and a few orders go to
+   "review". **Own-keyword guard:** drop every candidate whose normalised term equals
+   `ad_keyword` on any of its (b) rows with a positive match type - one term can match
+   several keywords in one ad group (close variants - `trainer cleaning kit` matched both
+   `trainer cleaning kit` and `trainers cleaning kit`) - and list them under "Excluded: own
+   keyword - route to bid optimizer" with the `ad_keyword_id` (note "already paused" when
+   that keyword's latest `ad_keyword_status`, by `last_seen`, is PAUSED). Observed on a UK
+   account: the top dead term was the exact keyword of its own ad group. Produce the
    candidate list with spend, clicks, orders, and the target campaign/ad group ids.
-5. **Dedupe against existing negatives.** `exports_create` for
-   `amazon_ads_negative_keywords` with `from` = 14 days ago, `to` = today (it needs a
-   date period; keep only rows from the latest `date`), filter
-   `ad_campaign_type = SPONSORED_PRODUCTS` and `ad_keyword_state = ENABLED`, columns
-   `ad_campaign_id`, `ad_group_id`, `ad_keyword_text`, `ad_match_type`. Drop every
-   candidate whose lower-cased term already exists for the same `ad_campaign_id` +
-   `ad_group_id` (match on `ad_campaign_id` + term alone when `ad_group_id` is null -
-   it is null for Sponsored Products rows before 2026-07-01). Report the skipped count
-   as "already negated". The snapshot is weekly, so a negative added in the last few
-   days can still slip through; if the live ADD then reports a duplicate for that term,
-   treat it as a no-op, not a failure.
+5. **Dedupe against existing negatives** - two exports on `amazon_ads_negative_keywords`
+   (weekly snapshot, `date` = Monday; it needs a date period):
+   - **Pick the snapshot first, independent of state:** `from` = 14 days ago, `to` =
+     today, `groupBy ["date"]`, `count(ad_keyword_id)`, filter `ad_campaign_type =
+     SPONSORED_PRODUCTS` only - no state filter. The newest `date` returned is the
+     snapshot. Never choose it from state-filtered rows: a negative paused this week has
+     no ENABLED row on the newest date, but last week's ENABLED row would survive and
+     wrongly suppress the candidate as "already negated".
+   - **Read that snapshot only:** `from` = `to` = that date, filter `ad_campaign_type =
+     SPONSORED_PRODUCTS` and `ad_campaign_id in (...)` for the candidates' campaigns,
+     columns `date`, `ad_campaign_id`, `ad_group_id`, `ad_keyword_text`, `ad_match_type`,
+     `ad_keyword_state`, CSV, page with `skip` if a page fills, then keep the rows with
+     `ad_keyword_state = ENABLED`.
+   Drop every candidate whose lower-cased term already exists for the same `ad_campaign_id`
+   + `ad_group_id` (match on `ad_campaign_id` + term alone when `ad_group_id` is null - it
+   is null for Sponsored Products rows before 2026-07-01). Report the skipped count as
+   "already negated". The snapshot is weekly, so a negative added in the last few days can
+   still slip through; if the live ADD then reports a duplicate for that term, treat it as
+   a no-op, not a failure.
 5b. **Live state check (campaign and ad group).** `actions_start`
    `AMAZON_ADS_CAMPAIGNS_FIND` with `campaignQuery.adProductFilter.include:
    ["SPONSORED_PRODUCTS"]`, `campaignIdFilter.include: [<candidate campaign ids>]`,
-   `stateFilter.include: ["ENABLED"]`; then `AMAZON_ADS_AD_GROUPS_FIND` with
-   `adGroupQuery.adGroupIdFilter.include: [<candidate ad group ids>]` and the same two
-   filters. Any candidate whose campaign or ad group does not come back is paused or
-   archived: drop it and list it under "Skipped: campaign / ad group paused". Observed:
+   `stateFilter.include: ["ENABLED"]`, `maxResults: 100`; then `AMAZON_ADS_AD_GROUPS_FIND`
+   with `adGroupQuery.adGroupIdFilter.include: [<candidate ad group ids>]` and the same
+   product, state and `maxResults` settings. **Read every page before judging:** poll
+   `actions_get` until each FIND completes; while the result carries a `nextToken`, start
+   the same FIND again with that `nextToken` and an otherwise identical query, and collect
+   the returned ids across all pages. A page holds at most 100 results, and an ID filter
+   longer than 100 is queried in groups of 100 that page through `nextToken` as well (only
+   one ID filter per FIND may exceed 100). Only when both FINDs are exhausted: any
+   candidate whose campaign or ad group is missing from the collected ids is paused or
+   archived - drop it and list it under "Skipped: campaign / ad group paused". Observed:
    a live FIND returned `deliveryReasons: ["AD_GROUP_PAUSED"]` for an ad group holding a
    dead term - a negative there would validate and do nothing. If FIND is refused
    ("Actions are not enabled ... Set access level to Read and write"), fall back to
@@ -203,16 +236,21 @@ null`. On "apply", the negative is added and future spend on that term stops.
 ## Quality self-check
 
 - Did I only include terms with enough clicks to trust the zero-order signal?
+- Did I find candidates from the grouped term-grain export (search term + campaign + ad
+  group), never from ungrouped daily rows truncated at 5,000, and never with keyword or
+  status columns in that `groupBy`?
 - Did I exclude / flag ASIN-target terms (`b0...`) so I don't kill competitor targeting?
 - Did I use `matchType: EXACT` / `PHRASE` / `BROAD` + `negative: true` (never `NEGATIVE_*`)?
 - Did I keep each negative in its own campaign/ad group (ids from the data)?
 - Did I drop terms already present in `amazon_ads_negative_keywords` for that
-  campaign/ad group, and report how many I skipped?
+  campaign/ad group - reading only the newest snapshot, picked before any state filter
+  and filtered to the candidates' campaigns - and report how many I skipped?
 - Did I split the batch so no action carries more than 25 targets?
 - Did I exclude terms that are the ad group's own bid keyword and route them to the bid
   optimizer instead of negating them?
 - Did I confirm campaign and ad-group state live (`CAMPAIGNS_FIND` / `AD_GROUPS_FIND`,
-  ENABLED only) before the dryRun, and skip paused ones?
+  ENABLED only) before the dryRun - following `nextToken` through every page before
+  calling a missing id paused - and skip paused ones?
 - Did I run `dryRun`, confirm `VALIDATED` / `actionId: null`, and show it before any real write?
 - Did I get explicit approval before `dryRun: false`?
 - Is the marketplace / currency right for the output display (it is NOT passed in the
@@ -221,6 +259,14 @@ null`. On "apply", the negative is added and future spend on that term stops.
 ## Common mistakes
 
 - Negating a term after 2-3 clicks - too little data, you may kill a converter.
+- Aggregating ungrouped daily search-term rows yourself - the export stops at 5,000 rows
+  (86,082 existed in 60 days on one account), so a term's converting days can fall off the
+  page and it looks dead. Group by search term, campaign and ad group in the export.
+- Treating an id missing from the first FIND page as paused - FIND returns at most 100
+  results per page; follow `nextToken` with the same query until it runs out.
+- Choosing the negatives snapshot after filtering `ad_keyword_state = ENABLED` - last
+  week's ENABLED row of a negative paused this week survives and suppresses a real
+  candidate. Pick the newest `date` first, then filter state.
 - Adding a negative account-wide instead of to the campaign/ad group that spent.
 - Skipping the dry run. Always validate first; you are responsible for writes.
 - Confusing search term (what the shopper typed) with keyword (what you bid on) -
