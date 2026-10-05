@@ -70,15 +70,21 @@ is the fix:
 4. **No offer / stranded inventory** - `offers == []` means no active offer (it implies
    non-buyable; the reverse does not hold - most non-buyable rows still carry an offers
    array with a price and simply have no sellable stock). **Before counting anything**,
-   split off the rows that never had an offer: **`summaries.fnSku` absent AND `offers ==
-   []` AND `fulfillment_availability` empty** = **"no offer ever (variation parent or
-   never-offered SKU)"**. Variation parents carry `LISTING_SUPPRESSED` and empty offers as
-   a matter of course and cost nothing; on one re-test 26 of 157 LISTING_SUPPRESSED rows
-   and 247 of 415 no-offer rows were parents, and 183 more were SKUs that never had an
-   offer. The signature matched 298 of 298 known parents; do **not** detect parents by SKU
-   name (`parent`, `_par`) - brittle. Exclude that bucket from the suppressed headline and
-   from "no offer"; report its count once as context (optionally confirm with
-   `attributes.parentage_level == "parent"` if `attributes` is pulled - large, not needed).
+   set aside variation parents, identified only by explicit metadata:
+   `attributes.parentage_level[0].value == "parent"` (pull `attributes` in the raw
+   export). On one UK account all 15 parent SKUs probed carried `parent` and their
+   children `child`; the `relationships` column came back empty, and a null `parent_asin`
+   also covers standalone products, so neither identifies a parent. Variation parents
+   carry `LISTING_SUPPRESSED` and empty offers as a matter of course and cost nothing (on
+   one re-test 26 of 157 LISTING_SUPPRESSED rows were parents): exclude them from the
+   suppressed headline and from "no offer", and report their count once as context. Do
+   **not** detect parents by SKU name - `Transparent` contains `parent`. Do **not** infer
+   "never had an offer" from the current snapshot either: no FNSKU, no offers and empty
+   `fulfillment_availability` also describe a seller-fulfilled SKU that sold last month
+   and has since gone inactive or been suppressed. A non-parent SKU with no offer goes to
+   the context count **"no offer, nothing at risk"** only when step 3 shows no 30-day
+   sales, no stock and no stranded units; a SKU with sales or stock stays in the
+   diagnostic buckets.
    **Stranded** = you still hold stock that cannot sell: `amazon_fba_stranded_inventory` is
    the source of record (`stranded_reason`, `primary_action`, and the **auto-removal
    deadline** `date_to_take_auto_removal` - Amazon disposes of the units on that date if
@@ -119,7 +125,8 @@ the same shape.
     `conditionType`, `lastUpdatedDate`), `issues` (array; each with `code`, `severity`,
     `categories[]`, `message`, `enforcements.actions[].action`, `enforcements.exemption`),
     `offers` (array; `[]` = no active offer), `fulfillment_availability`, and
-    `attributes`. NOTE: rows are large JSON - pull only the columns you need and parse
+    `attributes` (`attributes.parentage_level` marks variation parents; `relationships`
+    comes back empty). NOTE: rows are large JSON - pull only the columns you need and parse
     them programmatically; download to a file rather than dumping raw JSON into context.
     Export cap: **100 rows per JSON export / 250 per CSV**, and JSON columns cannot be
     filtered server-side (`contains` on `summaries` / `issues` is rejected). Filters work
@@ -202,7 +209,9 @@ the same shape.
    skipped were all Inactive with nothing at risk). `exports_create` on
    `amazon_listings_raw` with a bounded column set - `sku`, `child_asin`,
    `marketplace_country_code`, `summaries`, `issues`, `offers`,
-   `fulfillment_availability`, `last_seen_at` - and `filters: sku in (...)` for that set
+   `fulfillment_availability`, `attributes` (for `parentage_level`; it makes rows heavy,
+   which is one more reason to download to a file), `last_seen_at` - and `filters: sku in
+   (...)` for that set
    (CSV, `limit: 250`, `skip: n*250`, `orderByColumn: sku`; an 855-SKU / 23k-character
    filter was accepted). Download via `exports_raw_url_get` to a file and parse per row -
    do not dump raw JSON into context. Report the headline as "gates applied to {m} of {N}
@@ -221,10 +230,14 @@ the same shape.
      suppressed). `DISCOVERABLE` absent = won't show in search. `summaries` NULL = no
      snapshot payload.
    - `offers`: `[]` = no active offer (always non-buyable; the reverse is not true).
-   - **Parent / never-offered test first:** `summaries.fnSku` absent AND `offers == []` AND
-     `fulfillment_availability` empty -> bucket "no offer ever (variation parent or
-     never-offered SKU)"; drop these rows from the suppressed, no-offer and error counts
-     before anything else is tallied, and report the count once as context.
+   - **Parents first:** `attributes.parentage_level[0].value == "parent"` -> variation
+     parent; drop it from the suppressed, no-offer and error counts before anything else
+     is tallied, and report the parent count once as context. A missing
+     `parentage_level` is not a parent.
+   - **No offer, nothing at risk:** a non-parent row with `offers == []` and, from step 3,
+     no 30-day sales, no stock and no stranded units -> context count only. Every row with
+     sales or stock stays in its diagnostic bucket, whatever its offers and availability
+     look like today.
    - **Roll up identical ERROR root causes** across SKUs (same `code` / same message
      pattern, e.g. media on one host returning HTTP 403 behind several codes) into one
      line with the SKU count; keep per-SKU rows only for SKUs with sales or stock.
@@ -260,8 +273,8 @@ the same shape.
 ```
 Listing Health - {marketplace} - snapshot as of {last_seen_at} ({age})
 Scanned {N} listings · gates applied to {m} of {N} SKUs ({N-m} Inactive with no stock and no sales not gate-checked)
-{s} suppressed child SKUs (LISTING_SUPPRESSED; {sp} variation parents / never-offered excluded) · {r} catalog item removed · {e} errors ({eb} buyable but flagged, counted within the gate-checked set) · {a} attribute-suppressed · {q} search-suppressed · {t} stranded · {w} warnings
-Context: {i} inactive with no issue (out-of-stock / inactive offers - not suppressions) · {p} no offer ever (variation parents or never-offered SKUs)
+{s} suppressed SKUs (LISTING_SUPPRESSED; {sp} variation parents excluded) · {r} catalog item removed · {e} errors ({eb} buyable but flagged, counted within the gate-checked set) · {a} attribute-suppressed · {q} search-suppressed · {t} stranded · {w} warnings
+Context: {i} inactive with no issue (out-of-stock / inactive offers - not suppressions) · {sp} variation parents · {p} no offer and nothing at risk (no sales, stock or stranded units)
 
 TOP EXPOSURE: {sku} ({product}) - {gate failed}, ~{cur}{sales/30d} at risk (this SKU's own sales; no Active sibling)
 URGENT: {n} stranded SKUs reach auto-removal by {date} - {units} units, {cur}{value}
@@ -310,8 +323,9 @@ error" -> "Update price" on 141 units, auto-removal in 7 days - stranded invento
 top of the stranded table with units x price and that action; the same reason -> action
 pair covers 99 of the 123 stranded SKUs and the same codes sit behind 46 suppressions, so
 the report says "one fix clears both lists". The 26 variation parents carrying
-`LISTING_SUPPRESSED` with no fnSku and no offer are excluded from the suppressed count and
-reported once as "no offer ever". A third SKU is live but missing a recommended attribute -> a warning, listed
+`LISTING_SUPPRESSED` (`parentage_level` = parent) are excluded from the suppressed count and
+reported once as context, while a seller-fulfilled SKU with no current offer but sales last
+month stays in the suppressed list with those sales at risk. A third SKU is live but missing a recommended attribute -> a warning, listed
 below the blockers. The 4,900 out-of-stock offers that merely lack BUYABLE appear once, as
 a context count. Same scan, three severities, ordered by what costs the most.
 
@@ -329,9 +343,9 @@ a context count. Same scan, three severities, ordered by what costs the most.
 - Did I gate stranded on `fba_has_stranded_inventory` (with
   `amazon_fba_stranded_inventory` for reason/action), not on `Inactive` + stock alone?
 - Did I dedupe `amazon_listings_with_cogs` on `sku` before joining?
-- Did I split off "no offer ever" rows (`summaries.fnSku` absent AND `offers == []` AND
-  empty `fulfillment_availability`) before counting suppressions and no-offer rows, and
-  not detect parents by SKU name?
+- Did I set aside variation parents by `attributes.parentage_level` (never by SKU name or
+  by an empty current offer) before counting suppressions and no-offer rows, and keep
+  every SKU with sales or stock in the diagnostic buckets?
 - Did I pull `date_to_take_auto_removal`, sort stranded by it, lead with the URGENT line,
   roll up by reason -> action, and say "one fix clears both lists" when it does?
 - Did I apply the sibling rule in every bucket (not only at 0 sales), print the sibling's
@@ -366,8 +380,12 @@ a context count. Same scan, three severities, ordered by what costs the most.
 - Treating `amazon_listings_raw` as a time series - it's a current snapshot; use
   `last_seen_at` for age, and don't expect a date range to subset it.
 - Reporting a wall of dead long-tail SKUs above the one suppressed hero SKU.
-- Counting variation parents (no fnSku, no offer, no fulfillment availability) as
-  suppressed or as "no offer" - a parent is never buyable and costs nothing.
+- Counting variation parents as suppressed or as "no offer" - a parent is never buyable
+  and costs nothing; identify it by `attributes.parentage_level`, not by SKU name
+  (`Transparent` contains `parent`).
+- Reading "never had an offer" from today's snapshot - a seller-fulfilled SKU that sold
+  last month and went inactive also has no FNSKU, no offers and empty availability; check
+  step-3 sales and stock before setting a SKU aside.
 - Headlining a duplicate SKU whose sibling on the same ASIN is Active and selling - the
   ASIN is not at risk; TOP EXPOSURE is the biggest row without an Active sibling.
 - Ignoring `date_to_take_auto_removal` - stranded stock past that date is disposed of by
