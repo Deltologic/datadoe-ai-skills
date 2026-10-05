@@ -40,12 +40,13 @@ returns half the time. Live from DataDoe, read-only. No spreadsheets.
 1. **Return rate** per SKU = `return_units` / `total_units_sold` over the window, both
    from `amazon_profit_by_sku_and_date` (the denominator is the units actually sold;
    `return_units` is dated on return receipt/request, the same basis as `amazon_returns`,
-   so the two counts should agree). Compare each SKU to the catalog median - flag the
+   and is that table's summed `quantity` - returned units, not a count of return
+   events). Compare each SKU to the catalog median - flag the
    outliers, not everything. **Return-lag guard:**
    returns lag the sale, so a return this window can belong to a sale from a prior
    window - if a SKU's returns exceed its in-window units sold (rate > 100%) the rate is
    a lag artifact, not a real >100% return rate. Do NOT report it as a percentage; mark
-   it "lag-inflated" and rank it by cost / return count instead.
+   it "lag-inflated" and rank it by cost / returned units instead.
 2. **Return cost** per SKU = the signed `refund_cost` flipped to a positive cost + return
    handling/label cost. `refund_cost` already includes the return-COGS adjustment (the
    scheme: "Return COGS is added on the return date"), so do NOT add `return_cogs` on top -
@@ -114,7 +115,9 @@ moves it - and separately note how much of the volume is unfixable noise.
     the profit table for the rate denominator and the money (`refund_cost`,
     `return_cogs` per SKU). Use `return_units` from the profit table as the rate
     numerator so numerator and denominator share one table; if it diverges from the
-    `amazon_returns` count by more than a few %, say so rather than mixing them.
+    summed `amazon_returns.quantity` by more than a few %, say so rather than mixing them.
+    Compare units with units: one return event can carry several units, so a count of
+    return rows is not the same measure.
   - `amazon_settlements_with_cogs` (optional, for exact money) - actual refund amounts
     and returned-item fees settled in the window; use it to firm up the cost estimate
     and to confirm whether a returned unit was reimbursed/resellable.
@@ -141,8 +144,12 @@ moves it - and separately note how much of the volume is unfixable noise.
    `amazon_profit_by_sku_and_date` (always-on, premium; settlements optional).
 3. **Returns by SKU + reason:** `exports_create` on `amazon_returns` for the window,
    `groupBy [child_asin, sku, amazon_return_reason, amazon_fulfillment_channel]`,
-   `count` returns (+ `sum amazon_return_refunded_amount`, `sum amazon_return_label_cost`
-   for FBM). Aggregate to per-SKU totals and a per-SKU reason histogram.
+   `sum(quantity) as returned_units` (+ `count` as `return_events` if useful, + `sum
+   amazon_return_refunded_amount`, `sum amazon_return_label_cost` for FBM). Aggregate to
+   per-SKU returned units and a unit-weighted per-SKU reason histogram, and compare
+   `returned_units` with `return_units` from step 4. One event can carry several units
+   (one UK account, 60 days: 2,640 return rows held 2,650 units - one row of 10, one of
+   2), so a row count under-states units and trips a false divergence warning.
    Prefer pulling grouped and filtering client-side - you need the full per-SKU reason
    histogram anyway, so one grouped pull is the natural shape. (Server-side `sku` /
    `child_asin` filtering on `amazon_returns` has been unreliable in the past; if you do
@@ -178,7 +185,7 @@ SKU / ASIN         units  ret%    returns  cost        top bucket (share)      -
 {sku}              {u}    {r}%    {n}      {cur}{c}    Sizing (44%)            add size chart
 
 *lag = returns exceed in-window units sold (return-lag artifact); ranked by cost, not rate.
-units = total_units_sold, ret% = return_units / units, cost = -refund_cost + label cost (Profit by SKU & Date; return_cogs shown as context)
+units = total_units_sold, returns = returned units (sum of quantity), ret% = return_units / units, cost = -refund_cost + label cost (Profit by SKU & Date; return_cogs shown as context)
 
 Catalog return rate: {median}%   ·   Total refund cost in window: {cur}{sum}  (return_cogs: {cur}{c})
 Actionable vs non-actionable: {a}% actionable (product/listing/sizing) · {x}% non-actionable (delivery + noise)   [unclassified: {u}]
@@ -210,6 +217,8 @@ short, money-ranked list where each line already says what to do.
   complete day (~1-day lag)?
 - Did I take the money (`refund_cost`, `return_cogs`) from the profit table and the
   reasons from `amazon_returns` - and say which table each number came from?
+- Did I compare `return_units` with the summed `quantity` of `amazon_returns` (units),
+  not with a count of return rows, and weight the reason histogram by units?
 - Did I keep each marketplace in its own currency?
 - Did I separate low-actionability reasons (unwanted item, misordered) from fixable
   ones instead of inflating the "problem"?
@@ -217,6 +226,9 @@ short, money-ranked list where each line already says what to do.
 ## Common mistakes
 
 - Ranking by return rate and chasing a tiny SKU while a hero SKU quietly loses more.
+- Counting return rows as returned units - one return event can carry several units; sum
+  `quantity`, or the comparison with `return_units` reports a divergence that is not
+  there.
 - Reporting a rate with no reason - the reason is the whole point (it picks the fix).
 - Reporting a return rate above 100% as if real - that is the return-lag artifact
   (returns from earlier sales vs in-window units); flag it and rank by cost instead.
