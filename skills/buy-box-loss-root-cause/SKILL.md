@@ -61,8 +61,10 @@ synthesizes it from the buy-box % and price columns.
        GBP 2-19 dearer on the rest.
    - `your_price == featuredoffer_price` and bb_now == 0 with real traffic = **lost at
      matched price** - confirm with the offers who holds the box.
-   Without offers data (no snapshot for the ASIN, or one older than the anchor by more than
-   7 days) say "offers not checked" and give both possible causes.
+   The offers table is a snapshot that can be one or two weeks old (one account: 11 days
+   before the anchor). Use it whatever its age and print its date; when it is more than 7
+   days older than the anchor, prefix the cause with "likely". Only with no snapshot at all
+   for the ASIN say "offers not checked" and give both possible causes.
 3. **Stock** - `available = 0` = Amazon cannot feature the offer. Judge it on the **latest**
    snapshot (today), not only the anchor day: the buy-box read is lagged, a stockout is a
    today-problem. An ASIN that ran out often loses its page views too, so the stock check
@@ -109,14 +111,18 @@ Report the first gate that fails, biggest-revenue SKU first.
     profit table. One day is ~7,500 rows on a UK account, over the 5,000-row CSV cap, so
     always filter (`child_asin in (...)`, or the stockout filter in step 4c).
     Treat `your_price = 0` as missing (it is 0 on half to two thirds of the rows), not as a
-    price: for that SKU take `amazon_listings_with_cogs.listing_price_value` and say it is
-    today's listing price, not the anchor-day price.
+    price: for that SKU take `amazon_listings_with_cogs.listing_price_value` ([premium]) and
+    say it is today's listing price, not the anchor-day price. Leave used-condition and
+    `amzn.gr.*` Grade and Resell SKUs out of the price gate - they are priced below new, so
+    their negative gap means nothing.
   - `amazon_item_offers` - the offers on the listing: per-offer `SellerId`,
     `IsBuyBoxWinner`, `IsFulfilledByAmazon`, `ListingPrice`, `Shipping` inside the `offers`
     JSON, plus `summary` (offer count, Buy Box prices) and `last_seen_at`. Your own offers
     carry your `marketplace_seller_id` as `SellerId`. Not premium, no date range; a current
     snapshot per ASIN that can be a week or more old - state `last_seen_at`. Filter
-    `asin in (...)` for the flagged ASINs.
+    `asin in (...)` for the flagged ASINs. Your own FBM offer can be missing from it; the
+    ASIN's non-FBA SKUs and their `listing_price_value` in `amazon_listings_with_cogs` show
+    it.
   Premium note (applies to both premium tables above): a premium export costs 5 AI Tokens
   instead of 2 - nothing else differs, and the tables are part of the always-on default
   dataset, so they are never disabled. A 0-row export means no data in the window or an
@@ -128,11 +134,12 @@ Report the first gate that fails, biggest-revenue SKU first.
   - 7-day trend decides the label: **bb7 >= 90 and bb_now < 80 = "just lost it"**;
     **bb7 < 90 = "chronically low"**.
   - Traffic floor to flag: anchor-day `total_page_views` >= 20, or 7-day >= 50.
-  - Candidate floor for the 7-day pull: anchor-day `total_page_views` >= 8 (the 7-day floor
-    divided by 7, rounded up).
+  - Candidate floor for the 7-day pull: anchor-day `total_page_views` >= 5 (the 7-day floor
+    divided by 10, rounded up - low enough that an ASIN with a quiet anchor day but a busy
+    week still reaches the 7-day check).
   - **When the user sets a different floor X:** X replaces 20, the 7-day floor becomes 2.5
-    x X, and the candidate floor becomes the new 7-day floor divided by 7, rounded up
-    (floor 10 -> 7-day 25 -> candidate 4). Say which floors you used.
+    x X, and the candidate floor becomes the new 7-day floor divided by 10, rounded up
+    (floor 10 -> 7-day 25 -> candidate 3). Say which floors you used.
   - 30-day sales window: the **30 calendar days ending yesterday** (sales are ~1 day
     behind), independent of the anchor.
 - Currency/marketplace: localise (e.g. a German marketplace = EUR). The seller list can name
@@ -175,7 +182,7 @@ Report the first gate that fails, biggest-revenue SKU first.
      anchor-day row in (b), how many read bb_now < 80, and how many of those had 0 page
      views.
    - **Candidates for (d):** every selling ASIN from (c) with an anchor-day row, **bb_now <
-     95**, and anchor-day `total_page_views` >= the candidate floor (8 by default). Pull (d)
+     95**, and anchor-day `total_page_views` >= the candidate floor (5 by default). Pull (d)
      for this set, not for "the flagged ASINs": the 7-day floor needs (d) first, so pulling
      it only for flagged ASINs is circular and drops the ASINs that clear only the 7-day
      floor (one re-test: 12 anchor-day page views / 56 over 7 days, and 10 / 69 - both
@@ -202,8 +209,10 @@ Report the first gate that fails, biggest-revenue SKU first.
    `units_shipped_t30`):
    - **Latest date first:** `from` = 3 days ago, `to` = today, `groupBy [date]`,
      `count(sku)` -> the newest snapshot date (usually today).
-   - **(a) Anchor-day price snapshot:** `from = to = anchor day`, `child_asin in (...)` for
-     the flagged ASINs - it pairs with bb_now (same moment).
+   - **(a) Anchor-day snapshot:** `from = to = anchor day`, `child_asin in (...)` for the
+     flagged ASINs and the stockout-sweep ASINs from (c) - the price pairs with bb_now
+     (same moment), and the stock tells whether a stockout already existed on the anchor
+     day.
    - **(b) Offers:** `amazon_item_offers`, `asin in (...)` for the flagged ASINs,
      `item_condition` New - parse `offers` per ASIN: who holds the Buy Box, every other
      seller's landed price (price + shipping) next to yours, and any second offer of your
@@ -222,8 +231,8 @@ Report the first gate that fails, biggest-revenue SKU first.
 5. Join inventory onto the ASIN with **matching time bases**: pair the anchor-day price
    snapshot with **bb_now** (same day), never the 30-day average or a snapshot taken days
    later. `amazon_fba_inventory_health` can have several SKUs for one `child_asin` - do not
-   collapse those rows or average `your_price`; join on `sku` to put each SKU's own 30-day
-   sales next to its price row.
+   collapse those rows or average `your_price`; show each in-stock SKU's price row. Sales
+   stay per ASIN (the 30-day export in step 3c is grouped by `child_asin`).
    - Price (anchor-day snapshot): for each in-stock SKU (`available` > 0; a null
      `available` is unknown, not 0) with a price (`your_price > 0`, else the listings price
      as above), gap = `your_price - featuredoffer_price`. Then:
@@ -240,8 +249,10 @@ Report the first gate that fails, biggest-revenue SKU first.
        the Buy Box holder from 4b if there is one.
    - Stock (latest snapshot, 4c): out of stock today -> **stock (as of {latest date})** with
      the full 30-day sales exposed - even when the anchor-day read was fine. If the
-     anchor-day snapshot already showed 0, say "out of stock since at least {anchor}".
-     Show `inbound_quantity`.
+     anchor-day snapshot already showed 0, say "out of stock since at least {anchor}";
+     otherwise "ran out after {anchor}". Show `inbound_quantity`. List the top 10 stock
+     rows by sales exposed and give the rest as one line with their count and total (one
+     account had 79 stock rows, 53 of them under GBP 50).
    - Fulfilment/health check: **residual only** - no price row at all, or price and stock
      both fine and bb_now == 0 with no offers data.
 6. Rank by sales at risk - 30d sales x (1 - bb_now/100), or the full 30d sales on a current
@@ -257,13 +268,14 @@ Before the floor: {b} selling ASINs read < 80% on {anchor day}, {z} of them on 0
 SKU                 BB%(now) BB%(7d) PV   Sales    Likely cause                               Fix
 {sku}               {bb}%    {bb7}%  {pv} {cur}..  priced out (+{cur}gap)                     match/beat {cur}{feat}
 {sku}               {bb}%    {bb7}%  {pv} {cur}..  another seller at your price ({seller})    check that offer (enforcement, not a price cut)
-{sku}               {bb}%    {bb7}%  {pv} {cur}..  box not always shown (you are the only/cheapest seller)   check Featured Offer eligibility
+{sku}               {bb}%    {bb7}%  {pv} {cur}..  {likely }box not always shown (you are the only/cheapest seller{, offers of {date}})   check Featured Offer eligibility
 {sku}               {bb}%    {bb7}%  {pv} {cur}..  lost at matched price                      check who holds the box
 {sku}               {bb}%    {bb7}%  {pv} {cur}..  fulfilment/health (residual)               check FBM/AHR
 
 Sharing (80-94%), by sales at risk: {sku} {bb}% / {bb7}% - {cause} · {cur}{at risk}
-Out of stock today ({latest date}) - full 30d sales exposed, whatever the buy-box read:
-{sku}  {product}  0 units (inbound {n})  {cur}{sales 30d}  {out of stock since / FBM SKU still listed}
+Out of stock today ({latest date}) - full 30d sales exposed, whatever the buy-box read (top 10):
+{sku}  {product}  0 units (inbound {n})  {cur}{sales 30d}  {out since at least {anchor} | ran out after {anchor}}{ · FBM SKU still listed}
++ {n} more out-of-stock ASINs, {cur}{total} of 30-day sales
 Today's stock for the flagged ASINs: {all in stock | list}. Offers checked: {last_seen_at}.
 Unmeasured: {k} selling ASINs ({cur}{sales}) had no row on {anchor day} - no read, not losses.
 Biggest sales at risk: {sku} ({cur}.. exposed).
