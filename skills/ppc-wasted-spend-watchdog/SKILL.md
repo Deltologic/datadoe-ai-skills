@@ -82,7 +82,9 @@ would negate or cut:
    `ad_orders`, `ad_sales`. Recompute ACoS per placement.
 2. **Placement bid adjustments** — `amazon_ads_campaigns_raw`.
    `ad_campaign_optimization_placement_bid_adjustments` is JSON of
-   `{percentage, placement}` (`TOP_OF_SEARCH`, `REST_OF_SEARCH`, `PRODUCT_PAGE`).
+   `{percentage, placement}` (`TOP_OF_SEARCH`, `REST_OF_SEARCH`, `PRODUCT_PAGE`, and
+   `AMAZON_BUSINESS` where set - one account had it on 59 of 171 campaigns; list it with the
+   others).
    `ad_campaign_optimization_bid_strategy` changes how that percentage is applied.
 3. **Shopper cohort and segment adjustments** — same raw campaign row:
    `ad_campaign_optimization_shopper_segment_bid_adjustment` and
@@ -169,7 +171,10 @@ modifier you checked in the recommendation.
    - **(a) Money, term grain:** `groupBy ["ad_search_term", "ad_campaign_id",
      "ad_group_id"]` (keep the ids - the apply skills need them to target), sorted by the
      spend alias `DESC`, `limit` 5,000 CSV, for the top spenders and bleeders. If it returns
-     exactly `limit` rows and you need the tail, page with `skip`.
+     exactly `limit` rows and you need the tail, page with `skip` - and then order the
+     pages by `ad_search_term` instead of spend (equal spend values can shift rows across
+     page boundaries) and sort by spend in code; check that the paged spend adds up to the
+     share-of-spend denominator.
    - **(b) Dead bucket, term grain:** the same `groupBy` with `having clicks_sum >= 10 AND
      orders_sum = 0` - the complete dead bucket. Never add keyword, target, status or name
      columns to (a) or (b) (grain rule in Configuration).
@@ -194,7 +199,8 @@ modifier you checked in the recommendation.
    (`b0...` strings) as competitor targeting, not waste. Then bucket: dead (orders=0,
    clicks >= 10), bleeder (ACoS > break-even; split trim / negate / watch),
    ok - with the trim / negate / watch rule from the framework (negate needs ACoS > 100%
-   and 10+ clicks or 2+ orders). Sum wasted = dead spend + overspend on bleeders. Then pull
+   and 10+ clicks or 2+ orders). **Overspend** of a bleeder = spend - break-even ACoS x
+   sales. Sum wasted = dead spend + overspend on all bleeders (trim, negate and watch). Then pull
    (c) and run the two guards on the dead and negate buckets: **own keyword** - a candidate moves to the "Own keyword"
    group when any of its (c) rows has a positive match type and a normalised `ad_keyword`
    equal to the term (recommend pause / lower bid via the bid optimizer, with that
@@ -216,7 +222,8 @@ modifier you checked in the recommendation.
    `ad_group_state`, `ad_campaign_id`, filter `ad_group_id in (...)`). Both are 72-hour
    snapshots - say so. Mark rows `(paused)` when the campaign or the ad group is not
    ENABLED, add the line "of which in paused campaigns or ad groups: {cur}{x} (not
-   actionable)", and drop them from **both** hand-off lists. The headline total stays as
+   actionable)" - the paused share of the whole wasted total, every bucket including watch
+   - and drop them from **both** hand-off lists. The headline total stays as
    measured; the actionable figure is the live subset.
 7. Render, biggest spend first; show the top 10 of each bucket and the count of the rest.
    Hand off **live campaigns and ad groups only, own keywords removed**: dead terms and
@@ -247,7 +254,7 @@ Of which in paused campaigns or ad groups: {cur}{x} (not actionable) - state fro
 Excluded (ASIN-target terms, not junk): {rows} term rows, {cur}{spend}, {orders} orders in the window ({d} would have been dead, {cur}{x})
 Share of spend: {cur}{wasted} of {cur}{sp_spend} Sponsored Products spend ({pct}%)
 Modifiers checked: {placement / bid adjustment note per campaign cut}; audience check {done | skipped - no rows for this marketplace}
-Hand-off: {n} dead terms + {g} negate bleeders (live, not own keywords) -> ppc-negative-keyword-applier ·
+Hand-off: {n} dead terms + {g} negate bleeders (live, not own keywords) -> ppc-negative-keyword-applier (it skips any term already negated - this report does not dedupe) ·
 {m} trim bleeders + {k} own keywords -> ppc-bid-optimizer-apply · {w} watch (no action).
 ```
 

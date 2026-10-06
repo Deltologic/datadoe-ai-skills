@@ -231,13 +231,13 @@ the top spenders.
 
 ```
 Negative-keyword candidates - {marketplace} - last {N} days{ - from the Watchdog run of {window}, break-even {t}%}
-Spend on these terms in the window: {currency}{sum} (past spend the negatives would have blocked)
+Spend on these terms in the window: {currency}{sum} (past spend the negatives would have blocked){; the negate bleeders among them also had {o} orders / {currency}{sales} of sales, which a negative stops too}
 Already negated (skipped): {m} terms  (snapshot {date}; {n} existing negatives read)
 Excluded: own keyword - route to bid optimizer: {k} terms ({ad_keyword_id}, ...){, {u} removed upstream by the Watchdog}
 Skipped: campaign / ad group paused: {p} terms{, {u2} removed upstream by the Watchdog}
 
 #  Search term            Spend    Clicks  Orders  Campaign / Ad group      Match
-1  {term}                 {cur}{v} {n}     0       {campaign} / {group}     EXACT (neg)
+1  {term}                 {cur}{v} {n}     {o}     {campaign} / {group}     EXACT (neg)   (0 for dead terms; orders shown for negate bleeders)
 ...
 
 Dry run: {k} targets validated, 0 errors ({b} batches of <= 25).
