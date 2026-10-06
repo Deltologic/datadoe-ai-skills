@@ -141,11 +141,19 @@ Mine 3-4 star reviews for the real audience language and objections.
     `child_asin_click_count` + `search_query_total_click_count`,
     `child_asin_add_to_cart_count`, `child_asin_purchase_count` +
     `search_query_total_purchase_count`, `child_asin_search_query_score`,
-    `child_asin_median_click_price_value`/`_currency`.
+    `child_asin_median_click_price_value`/`_currency`. Coverage is per configured ASIN
+    and often sparse (weeks can be missing and the latest week stale), and each week
+    carries at most ~100 queries (the report cap, not the full query set) - probe
+    coverage first (workflow step 4a). Fallback when weekly coverage is thin:
+    `amazon_child_product_organic_search_ranks_per_month` (same funnel columns, one row
+    per month).
   - `amazon_products_by_child_asin` (fallback / supplement for content) - `product_name`
-    (title), `product_bullet_point_1..5`, `product_description`, `product_brand`,
-    category, BSR, `product_image_url`, `marketplace_country_code`. Prefer
-    `amazon_listings_raw.attributes` for title/bullets/description/brand; use this for
+    (the displayed title), `product_bullet_point_1..5`, `product_description`, `product_brand`,
+    category, BSR, `product_image_url`, `marketplace_country_code`. It returns a row for
+    **every marketplace the seller is in** (e.g. CA / DE / GB for one UK seller) - always
+    filter `marketplace_country_code` to the target marketplace (rows use `GB`;
+    `sellers_and_vendors_list` reports `UK` for the same seller). Prefer
+    `amazon_listings_raw` for submitted title/bullets/description/brand; use this for
     category / BSR or when `attributes` is sparse.
   - `amazon_listings_raw` - the real backend-keyword + attribute source, and the
     place to see **which attribute fields are empty** (the "death of null" gap COSMO
@@ -159,6 +167,12 @@ Mine 3-4 star reviews for the real audience language and objections.
     - **Listing content** (richer than the catalog source): `item_name`, `bullet_point[]`,
       `product_description` (HTML), `brand`, `color`, `size`, image locators
       (`main_product_image_locator`, `other_product_image_locator_1..5`), `list_price`.
+    - **Two titles, not one.** `attributes.item_name` is the title you *submitted*;
+      `summaries.itemName` is the title Amazon *displays* (it equals
+      `amazon_products_by_child_asin.product_name`). They can differ wildly - 66 vs 149
+      chars observed on the same SKU. **Measure the 75-char rule on `summaries.itemName`**
+      and flag the divergence when the two differ: Amazon is not showing your
+      contribution, so a compliant submitted title does not make the listing compliant.
     - **Empty-attribute gaps**: compare the `attributes` keys against what's expected for
       the SKU's `summaries.productType` (types differ - `SHARP_PIN` carries far fewer
       fields than `SHOE_INSERT`); an expected field absent or an empty array is a gap.
@@ -199,15 +213,31 @@ Mine 3-4 star reviews for the real audience language and objections.
    filtered to the ASIN; download to a file and parse. From `attributes` read
    `item_name`, `bullet_point[]`, `product_description`, `brand`; the backend terms from
    `attributes.generic_keyword[].value` for the target `marketplace_id`; `productType`
-   from `summaries`; and `issues[]`. Fall back to `amazon_products_by_child_asin` for
-   title / bullets / category / BSR if `attributes` is sparse. Read the marketplace's
-   caps now (Copy rules below).
-4. **Funnel per query (the core):** `exports_create` on the SQP source for the ASIN
-   over a full recent window (>= 8 weeks), grouped by `search_query`, pulling BOTH the
-   `child_asin_*` and the `search_query_total_*` columns so you can benchmark against
-   the market. Compute impression share, your-vs-market CTR, cart rate, your-vs-market
-   CVR. Sum funnel counts over the window before dividing; if showing Search Query
-   Score, pull `date` separately and show per-period values without aggregation.
+   **and `itemName`** from `summaries`; and `issues[]`. Record both titles with their
+   lengths: **displayed** = `summaries.itemName` (this is the one the 75-char compliance
+   verdict uses) and **submitted** = `attributes.item_name`. If they differ, say so in the
+   header - Amazon is displaying a different title than the one on file, and the submitted
+   title's length proves nothing. Fall back to `amazon_products_by_child_asin` for
+   title / bullets / category / BSR if `attributes` is sparse - filtered to the target
+   `marketplace_country_code`, since it returns one row per marketplace of the seller.
+   Read the marketplace's caps now (Copy rules below).
+4. **SQP coverage probe, then the funnel per query (the core):**
+   - **4a. Coverage probe first.** `exports_create` on the SQP weekly source for the ASIN
+     over the intended window (>= 8 weeks), `groupBy: ["date"]` with
+     `countDistinct(search_query)` and `sum(child_asin_impression_count)`. Report which
+     weeks exist and the age of the latest one (observed: 4 non-contiguous weeks in a
+     year, latest 8 weeks old, exactly 100 queries per week - the per-ASIN report cap,
+     not the full query set). If fewer than ~4 weeks are present in the window, either
+     fall back to `amazon_child_product_organic_search_ranks_per_month` (same funnel
+     columns, monthly rows) or run in **"snapshot" mode** on the weeks that exist - and
+     say so in the header: which periods the analysis rests on and how stale they are.
+     Never present a one-week sample as an 8-week trend.
+   - **4b. Funnel pull.** `exports_create` on the SQP source for the ASIN over the window
+     (or the periods found in 4a), grouped by `search_query`, pulling BOTH the
+     `child_asin_*` and the `search_query_total_*` columns so you can benchmark against
+     the market. Compute impression share, your-vs-market CTR, cart rate, your-vs-market
+     CVR. Sum funnel counts over the window before dividing; if showing Search Query
+     Score, pull `date` separately and show per-period values without aggregation.
 5. **Theme check (first):** cluster into themes, find the best-converting theme with
    real volume, check whether its words are in the title.
 6. **Classify each high-value query** as exposure / keyword coverage / CTR / CVR /
@@ -290,7 +320,9 @@ Mine 3-4 star reviews for the real audience language and objections.
 ## Output format
 
 ```
-Listing Optimizer - {ASIN} - {marketplace}   (current title {chars}/75 chars {FLAG if >75})
+Listing Optimizer - {ASIN} - {marketplace}   (displayed title {chars}/75 chars {FLAG if >75})
+{if submitted != displayed: "Submitted item_name is {chars}/75 but Amazon displays a different {chars}-char title - contribution not shown."}
+SQP coverage: {n} weeks present ({first}..{last}), latest {age} weeks old{; "snapshot mode" / "monthly fallback" if < ~4 weeks}
 
 THEME CHECK (what actually converts)
   theme            vol/mo   your CVR   CTR vs mkt   in title?   -> action
@@ -350,7 +382,12 @@ days-to-weeks" plan - a diagnosis and the rewrite, not a keyword list.
 ## Quality self-check
 
 - Is the rewritten title <= 75 characters, brand-first, one keyword each, no
-  promo/subjective words, no banned symbols? Did I flag the current title if it's over?
+  promo/subjective words, no banned symbols? Did I flag the current title if it's over -
+  measured on the **displayed** `summaries.itemName`, not only the submitted
+  `attributes.item_name`, and did I flag it when the two differ?
+- Did I probe SQP coverage (`groupBy date`) before the funnel and state which weeks the
+  analysis rests on, how stale they are, and whether I fell back to monthly / snapshot mode?
+- Did I filter `amazon_products_by_child_asin` to the target marketplace?
 - Did I benchmark each funnel stage against the market (not absolute numbers) and
   separate exposure (ads/offer/coverage) from copy (image/page) problems?
 - Did I run the theme check first and put the best-converting theme in the title?
@@ -371,6 +408,13 @@ days-to-weeks" plan - a diagnosis and the rewrite, not a keyword list.
 
 - Writing a long, keyword-stuffed title - it now breaks the 75-char policy and COSMO
   flags it; Amazon may auto-rewrite it against you.
+- Measuring title compliance on `attributes.item_name` alone - a 66-char submitted title
+  can sit behind a 149-char displayed `summaries.itemName`; the displayed one is what
+  Amazon enforces.
+- Running the funnel on whatever SQP rows come back without checking coverage - one stale
+  week dressed up as an 8-week trend, or 100 capped queries read as the whole market.
+- Reading `amazon_products_by_child_asin` unfiltered and mixing another marketplace's
+  title / bullets into the audit.
 - Reading CTR/CVR as absolute numbers instead of against the market for that query.
 - Treating Search Query Score as organic position or proof that a term is not indexed.
 - Aggregating query scores into a "best organic rank" across periods or ASINs.
