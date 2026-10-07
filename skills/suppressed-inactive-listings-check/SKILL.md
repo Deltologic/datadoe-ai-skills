@@ -207,21 +207,24 @@ error from the headline because its sibling had sold GBP 48.
 2. `exports_sources_get` -> confirm `amazon_listings_raw` is `enabled`; resolve
    `amazon_listings_with_cogs` (narrowing + stranded gate; premium, never disabled) and
    confirm `amazon_fba_stranded_inventory` plus `amazon_profit_by_sku_and_date` for ranking.
-3. **Narrow first:** `exports_create` on `amazon_listings_with_cogs` (`sku`, `child_asin`,
-   `marketplace_country_code`, `listing_status`, `fba_quantity_available`,
+3. **Narrow first:** `exports_create` on `amazon_listings_with_cogs` (`listing_id`, `sku`,
+   `child_asin`, `marketplace_country_code`, `listing_status`, `fba_quantity_available`,
    `fba_has_stranded_inventory`, `listing_name`, `listing_price_value`; limit 5000,
-   paginate with `skip`), dedupe on `sku`, and bucket: Active / Inactive / Incomplete,
+   `orderByColumn listing_id` - selected and unique per row, so `skip` pages are stable;
+   an unordered or `sku`-ordered page can swap the two rows of a duplicated SKU),
+   dedupe on `sku`, and bucket: Active / Inactive / Incomplete,
    stranded (`fba_has_stranded_inventory = true`), and "inactive with stock"
    (`listing_status != Active` AND `fba_quantity_available > 0`). Pull
    `amazon_fba_stranded_inventory` (small, one row per stranded SKU) with the column list
    from Configuration - reason, action and the auto-removal deadline. **Pull the 30-day
    sales now, before the raw pull** (they drive the narrowing in step 4): `exports_create`
    on `amazon_profit_by_sku_and_date`, `from`/`to` = the 30 calendar days ending
-   yesterday (say the dates), `groupBy [sku, child_asin]`, `sum(total_sales)`,
-   `sum(total_units_sold)`, no SKU filter (CSV; paginate with `skip` above 5,000 rows).
-   Data facts: rows with a null `sku` are account-only (ads with no SKU) and carry no SKU
-   sales - drop them; if a SKU comes back on two rows, sum it in code; and a SKU with no
-   sales has **no row at all**, so a missing row means 0, never "unknown". If
+   yesterday (say the dates), `groupBy [sku]`, `sum(total_sales)`,
+   `sum(total_units_sold)`, no SKU filter (CSV; above 5,000 rows page with `orderByColumn
+   sku` - one row per SKU, so the order is unique). `child_asin` for the sibling rule comes
+   from the listings table above. Data facts: the row with a null `sku` is account-only
+   (ads with no SKU) and carries no SKU sales - drop it; and a SKU with no sales has **no
+   row at all**, so a missing row means 0, never "unknown". If
    `amazon_listings_with_cogs` returns 0 rows (initial load still in progress), say so,
    skip to step 4 and page the raw table instead.
 4. **Pull raw listings only for the SKUs that need the JSON gates.** Two sets:
