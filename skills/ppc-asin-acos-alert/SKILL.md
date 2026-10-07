@@ -145,11 +145,17 @@ email easier to read. Build it only when the user says yes.
   premium - 5 AI Tokens per export) over a settled window - `from` = today - 104 days, `to` =
   today - 15 days (90 days; Amazon's fees reach the profit table late) - `groupBy
   ["child_asin", "product_name", "cogs_present"]`, sums of `total_sales`, `sales_tax`,
-  `cogs_total`, `total_fees` (aliases `sales_sum`, `tax_sum`, `cogs_sum`, `fees_sum`). Use only
-  the rows with `cogs_present` = true (rows without COGS inflate the margin) and report the share
-  of sales they cover; under ~80% coverage, ask the user for a unit cost instead of guessing.
-  Margin before ads = (sales - sales tax - COGS - fees) / (sales - sales tax); **break-even ACoS
-  = that margin**.
+  `cogs_total`, `total_fees` (aliases `sales_sum`, `tax_sum`, `cogs_sum`, `fees_sum`). The
+  `cogs_present` groups mean different things - treat them separately:
+  - `true` - sales rows with uploaded COGS: use their sales, tax, COGS and fees.
+  - `false` - sales rows **missing** COGS: leave them out (they would inflate the margin) and
+    report their share of sales as the COGS gap; under ~80% coverage, ask the user for a unit
+    cost instead of guessing.
+  - `null` - **fee-only rows** (no shipped items or returns that day: storage, inbound and
+    similar fees). Keep their fees - they are real costs of the ASIN. If part of the sales was
+    left out as `false`, scale these fees by the covered share so costs and sales match.
+  Margin before ads = (net sales - COGS - all kept fees) / net sales, where net sales = sales -
+  sales tax (`sales_tax` is already 0 in the US / Canada); **break-even ACoS = that margin**.
 - **Break-even at or below 0:** the ASIN "loses money before ads - check COGS and fees"; no ACoS
   target can be profitable, so suggest no threshold for it.
 - Caveats to show with the table: DataDoe fees can include VAT charged on Amazon's fees - for a
@@ -199,8 +205,8 @@ sales -> next step: wasted-spend watchdog on that campaign's search terms.
 - Over-by in percentage points, worst first, table format?
 - Window stated in the email; attribution note included?
 - Window end correct for the run time (before ~10am -> the day before yesterday), and stated?
-- Updated version: break-even only from rows with COGS, negative break-even reported as "loses
-  money before ads"?
+- Updated version: break-even from rows with COGS plus fee-only rows (null), rows missing COGS
+  left out and reported, negative break-even reported as "loses money before ads"?
 - Routine prompt contains every ASIN and threshold, the recipient, the time and time zone?
 - Did I offer the updated version - and change nothing unless the user said yes?
 
@@ -213,7 +219,9 @@ sales -> next step: wasted-spend watchdog on that campaign's search terms.
 - Mixing marketplaces - one routine per marketplace account.
 - Including a half-loaded yesterday in an early-morning run (Sponsored Brands rows missing,
   Sponsored Products spend partial).
-- Computing break-even from rows without COGS (it looks far too generous).
+- Computing break-even from rows without COGS (it looks far too generous) - or dropping the
+  fee-only rows (`cogs_present` null), which removes storage / inbound fees and overstates the
+  safe ACoS.
 
 ## Notes
 

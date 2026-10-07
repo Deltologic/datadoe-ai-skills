@@ -81,13 +81,17 @@ Vendor inventory numbers come in two kinds - mixing them up is the classic mista
   - The ASIN column is `child_asin` (older builds used `asin`, which no longer exists).
 - `requiresDatePeriod` is true: always send `from` / `to` (YYYY-MM-DD).
 - **Data lag:** vendor data arrives ~4 days behind. Anchor the window on the newest `date` that
-  has rows, not on today, and show that date as "Data as of".
+  has a populated inventory snapshot (not just rows), not on today, and show that date as "Data
+  as of".
 - Window: last 30 days ending at that newest date (adjustable).
 - Currency: from the `*_currency` column; never hardcode a symbol.
 - Row caps: 1,000 rows per JSON export, 5,000 per CSV. Pull every ASIN (CSV if large), compute
   totals over all of them, and embed all of them in the page.
-- Data hygiene: about half the rows on a given day can be entirely null - drop ASINs with no data
-  in either the snapshot or the window; treat a negative value (e.g. open PO -1) as 0.
+- **Missing is not zero:** the inventory columns are nullable. For snapshot columns, an ASIN
+  with no value on `D` is **unknown** - show "-", leave it out of the stock totals' denominators
+  as needed, and never flag it out of stock. Flow columns (received, shipped, returns) treat
+  null as 0. Drop ASINs with no data at all in either export; treat a negative value (e.g. open
+  PO -1) as 0.
 
 ## Step-by-step workflow (MCP-native)
 
@@ -96,8 +100,12 @@ Vendor inventory numbers come in two kinds - mixing them up is the classic mista
 2. `exports_sources_get` (query "vendor sales") -> resolve
    `amazon_vendor_sales_traffic_and_inventory_by_child_and_date`; `exports_source_get` to
    confirm the columns above (page through all column pages).
-3. **Newest date:** `exports_create`, `from` = 14 days ago, `to` = today, `groupBy ["date"]`,
-   `count(child_asin)`, JSON. The newest `date` with rows = the snapshot date `D`.
+3. **Newest snapshot date:** `exports_create`, `from` = 14 days ago, `to` = today, `groupBy
+   ["date"]`, `count` of `manufacturing_retail_sellable_on_hand_inventory_units` (alias
+   `snapshot_rows` - counts only rows where the snapshot is populated) and `count` of
+   `child_asin` (`all_rows`), JSON. `D` = the newest date whose `snapshot_rows` is close to its
+   usual level. This table joins sales/traffic and inventory, so a date can have ASIN rows with
+   no inventory snapshot at all - picking it by row count would read every stock figure as 0.
 4. **Snapshot export:** `from` = `to` = `D`, `groupBy ["child_asin",
    "manufacturing_retail_sellable_on_hand_inventory_cost_currency"]`, sum each snapshot
    column (aliases `sellable`, `unsellable`, `open_po`, `aged_90`, `sellable_cost`,
@@ -171,7 +179,8 @@ Build it only when the user says yes (the Refresh button then re-runs the extra 
   `manufacturing_retail_ordered_units` / 30 x 7 (add it to the flow export). "-" when there was
   no demand.
 - **Flag** column (and a KPI card "ASINs at risk" = 🔴 + 🟠):
-  - 🔴 Out of stock - sellable 0 with customer demand in the window.
+  - 🔴 Out of stock - sellable reported as 0 (not unknown) with customer demand in the window.
+  - ❔ No stock data - the snapshot is missing for this ASIN on `D`; never treated as 0.
   - 🟠 Stockout risk - under 4 weeks of cover and 0 open PO units.
   - 🟡 Overstock - over 26 weeks of cover, or aged 90+ above 20% of sellable with more than 8
     weeks of cover; also stock with no demand at all ("no demand").
@@ -202,6 +211,8 @@ healthy now, but nothing on order. ASIN B: 900 sellable, 610 of them aged 90+, 4
 - Summing sellable / open PO / aged units over 30 daily rows (inflates stock ~30x - 30.05x in
   testing).
 - Grouping by `asin` - the column is `child_asin`.
+- Picking the snapshot date by row count, or treating a missing snapshot as 0 - stock reads 0
+  and ASINs get flagged out of stock.
 - Adding `manufacturing_retail_*` and `sourcing_retail_*` values together (double count).
 - Ending the window at today - the last ~4 days are empty for vendors.
 - JSON `limit` above 1,000 (the export fails) - use CSV for large catalogs.

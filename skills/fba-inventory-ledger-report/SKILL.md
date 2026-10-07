@@ -9,7 +9,7 @@ description: >-
   DataDoe. Use for "inventory ledger", "ledger per SKU", "where did my units go", "FC
   transfers", "fulfillment center transfers", "inventory reconciliation", "EU inventory
   movements", or "customer damaged units". Then offers an updated version with a lost &
-  damaged vs reimbursed sheet (units Amazon may still owe you) and a balance check.
+  damaged vs reimbursed sheet (losses next to what Amazon paid back) and a balance check.
 metadata:
   author: DataDoe
   check-more-skills-at: https://app.datadoe.com/hub/ai-agents-and-skills
@@ -94,10 +94,14 @@ together, group by `fnsku`.
   (workflow step 3) and keep each sheet to what can be pulled and opened: up to ~25,000 rows
   per sheet in full, otherwise movement rows only, otherwise a shorter window.
 - **EU-wide ledgers:** with Pan-EU / unified accounts Amazon reports one ledger for the whole
-  region, so every marketplace account returns the same ledger rows. If the per-date row counts
-  are identical across marketplaces, build **one** ledger sheet ("Ledger - EU") from one account
-  and never add marketplaces together (the same applies to reimbursements). Inventory snapshots
-  stay per marketplace.
+  region, so every marketplace account can return the same ledger rows. Identical row counts are
+  only a hint - two separate ledgers can have the same size. Collapse marketplaces into **one**
+  sheet ("Ledger - EU") only after proving the data is the same: per date, the totals of
+  `starting_warehouse_balance`, `ending_warehouse_balance`, `receipts` and `customer_shipments`
+  match across the accounts, AND one sampled partition (one date, a few FCs) is identical record
+  for record (same fnsku + location + disposition keys with the same values). If either check
+  fails, keep one sheet per marketplace and keep their totals separate. Inventory snapshots
+  always stay per marketplace.
 - **Lag and gaps:** ledger data typically lags 7-9 days and can miss whole dates. Find the
   newest date per marketplace and any missing dates in the window, and state both.
 - Window: the **last 7 days of available ledger data** by default (ask; longer windows are
@@ -105,9 +109,13 @@ together, group by `fnsku`.
 - Marketplaces: one DataDoe seller account per marketplace. `exports_create` takes up to 5
   `sellerOrVendorIds` at once - pull the chosen accounts together and split rows by
   `marketplace_country_code`.
-- Row caps: 1,000 rows per JSON export, 5,000 per CSV - use CSV and page with `skip` until a
-  page returns fewer than `limit` rows. Only one `orderByColumn` is allowed - order by `date`
-  and finish sorting in code. Never truncate silently.
+- Row caps: 1,000 rows per JSON export, 5,000 per CSV. **Don't page big ledger pulls with
+  `skip`:** each page is a separate query, the only allowed order key (`date`) is not unique, and
+  tied rows can move between pages - duplicated or lost. Instead, **partition** every pull so
+  each export fits in one page: one date per export, and if a date is still above 5,000 rows,
+  split it by `location` (ledger summary) or `fulfillment_center` (details) into groups sized
+  from the size check (filter `in` a set of FCs). Check every partition's row count against the
+  size check. Finish sorting in code. Never truncate silently.
 
 ## Step-by-step workflow (MCP-native)
 
@@ -119,21 +127,27 @@ together, group by `fnsku`.
 3. **Size check (cheap, aggregated):** for each ledger table, `exports_create` over the last
    ~21 days with `groupBy ["date", "marketplace_country_code"]` and a `count`. From it:
    - the newest date per marketplace (this sets the window end) and missing dates;
-   - whether marketplaces return identical counts (-> one EU-wide ledger);
+   - whether marketplaces might share an EU ledger (identical counts -> run the proof in
+     Configuration before collapsing);
+   - for big days, a second count grouped by `date` and `location` (or `fulfillment_center`)
+     to plan partitions of at most 5,000 rows;
    - the row volume for the window. If the summary window holds more than ~25,000 rows, run the
      count again with the **movement-row filter** (combinator `or`: each movement column `!=
      0`); if that is still above ~50,000, shorten the window (newest 1-3 days) or sum across
      locations (`groupBy` date, `msku`, `fnsku`, `disposition`, sums; the Location column is
      dropped). Tell the user which one you did.
-4. **Ledger summary** - `exports_create` for the window with the columns above (plus
-   `marketplace_country_code`), the filter from step 3 if needed, CSV, paged.
-5. **Ledger details** - same window, the detail columns, CSV, paged. All event types (filter
-   `event_type = WhseTransfers` only if the user wants transfers alone). Apply the same size
-   rule.
-6. **Inventory snapshot** - `exports_create` on `amazon_fba_inventory_health`, `from` = 3 days
-   ago, `to` = today, the inbound / reserved / available columns plus `date`, `sku`, rows with
-   stock only (combinator `or`: `available > 0`, `inbound_quantity > 0`,
-   `total_reserved_quantity > 0`), CSV, paged. Keep the newest `date` per marketplace.
+4. **Ledger summary** - one `exports_create` per partition from step 3 (date, and FC group
+   when needed) with the columns above (plus `marketplace_country_code`) and the movement filter
+   if used, CSV. Each partition must come back with the row count the size check predicted.
+5. **Ledger details** - same partitioning (date, `fulfillment_center` groups), the detail
+   columns, CSV. All event types (filter `event_type = WhseTransfers` only if the user wants
+   transfers alone).
+6. **Inventory snapshot** - per marketplace account: find the newest snapshot date
+   (`amazon_fba_inventory_health`, `from` = 3 days ago, `to` = today, `groupBy ["date"]`,
+   `count`), then export that date only with `date`, `sku` and the inbound / reserved / available
+   columns, rows with stock only (combinator `or`: `available > 0`, `inbound_quantity > 0`,
+   `total_reserved_quantity > 0`), CSV, `orderByColumn sku` - one row per SKU on a snapshot
+   date, so `sku` is a unique order key and `skip` paging is safe here.
 7. **Consolidated view:**
    - Ledger balance: per marketplace (or EU), `exports_create` on the summary for the newest
      date only, filter `disposition = SELLABLE`, `groupBy ["fnsku", "msku"]`, sum
@@ -145,9 +159,9 @@ together, group by `fnsku`.
 9. Offer analysis in chat: biggest unreconciled quantities, lost/damaged by SKU, units in
    transit between FCs.
 10. **Offer the updated version** (see below): "There's an updated version of this workbook -
-    it adds a Lost & Damaged vs Reimbursed sheet that shows units Amazon lost or damaged and
-    hasn't paid back yet, plus a balance check on every ledger row. Want it?" Build it only on a
-    yes.
+    it adds a Lost & Damaged vs Reimbursed sheet that puts the units Amazon lost or damaged next
+    to the reimbursements it approved, plus a balance check on every ledger row. Want it?" Build
+    it only on a yes.
 
 ## Output format
 
@@ -175,31 +189,37 @@ only when the user says yes.
 - **Balance Check column** on every ledger sheet: starting balance + the movement columns -
   ending balance (in-transit left out), which should be 0. Highlight only the rows that don't
   balance, and report the share that do.
-- **New sheet "Lost & Damaged vs Reimbursed"** (one row per SKU - per marketplace, or once for an
-  EU-wide ledger - sorted by estimated value). This uses aggregated exports, so a 30-day window
-  is affordable even for big accounts:
-  - Ledger summary over the window, `groupBy ["msku", "fnsku"]`, sum `lost`, `damaged`, `found`
-    (aliases `total_lost`, `total_damaged`, `total_found`). `lost` and `damaged` are stored as
-    negatives: **Net lost = -(lost + damaged) - found**, never below 0.
-  - `FBA Reimbursements` (`amazon_fba_reimbursements`) from the window start to today (Amazon
-    pays late), reasons `Lost_Warehouse` and `Damaged_Warehouse`: reimbursed units
-    (`quantity_reimbursed_total`) and amount (`amount_total`) per SKU, per currency
-    (`currency_unit`). Show `Lost_Inbound` reimbursements in a separate column - inbound
-    shortages are not ledger losses.
-  - Unreimbursed units = max(0, net lost - reimbursed units). Est. value = unreimbursed x the
-    SKU's average cash `amount_per_unit` over the last 12 months (rows with
-    `quantity_reimbursed_cash` > 0); no history -> the user's unit cost, or leave it blank.
-    Keep each currency separate - never add GBP and EUR.
-  - Footer: these are candidates to check, not guaranteed claims - Amazon reimburses many units
-    automatically after investigating, and claim windows are limited (check Amazon's current
-    policy). Point the user to Seller Central's reimbursement / case flow for the top rows.
+- **New sheet "Lost & Damaged vs Reimbursed"** (one row per SKU - per marketplace, or once for a
+  proven EU-wide ledger - sorted by the value of the losses). It shows the two sides **next to
+  each other without netting them**: a reimbursement's `date` is its approval date, so a payment
+  approved this month can be for a loss from last quarter - subtracting it from this month's
+  losses would hide new, unpaid ones. Aggregated exports keep a 30-day window affordable:
+  - **Losses in the window:** ledger summary, `groupBy ["msku", "fnsku"]`, sum `lost`,
+    `damaged`, `found` (aliases `total_lost`, `total_damaged`, `total_found`). `lost` and
+    `damaged` are stored as negatives: **Net lost = -(lost + damaged) - found**, never below 0.
+    Value of the losses = net lost x the SKU's average cash `amount_per_unit` over the last 12
+    months (rows with `quantity_reimbursed_cash` > 0); no history -> the user's unit cost, or
+    blank.
+  - **Reimbursements approved in the window** (`amazon_fba_reimbursements`), reasons
+    `Lost_Warehouse` and `Damaged_Warehouse`: units (`quantity_reimbursed_total`) and amount
+    (`amount_total`) per SKU, per currency (`currency_unit`) - labelled "approved in the window
+    (may relate to earlier losses)". `Lost_Inbound` in its own column (inbound shortages are not
+    ledger losses).
+  - Where a reference links a loss to a payment (e.g. an `Adjustments` event's `reference_id`
+    and a reimbursement for the same FNSKU and quantity), show the match; otherwise leave the
+    two sides unmatched. Never derive "units Amazon hasn't paid back" from the difference.
+  - Keep each currency separate - never add GBP and EUR.
+  - Footer: losses with no matching payment are worth checking in Seller Central's
+    reimbursement / case flow - Amazon reimburses many units automatically after
+    investigating, and claim windows are limited (check Amazon's current policy).
 - `amazon_fba_reimbursements` is not in the default dataset: if `enabled` is false, say so and
   ask the user to enable it in Settings > Data instead of showing an empty sheet.
 
 ## Worked example (illustrative)
 
 A UK + DE seller asks "where did my units go?". The size check shows ~48,000 ledger rows per
-day and identical counts for UK and DE - a shared EU ledger - so the workbook gets one
+day; UK and DE have identical counts, matching daily totals and an identical sampled
+partition - a proven shared EU ledger - so the workbook gets one
 "Ledger - EU" sheet with movement rows only for the newest 7 days. SKU X starts at 1,200
 sellable units: -950 customer shipments, +40 customer returns, -60 warehouse transfers, ending
 at 230. The FC Transfers sheet shows those 60 units as WhseTransfers events from a UK FC to
@@ -213,8 +233,10 @@ don't reconcile.
 - Did I confirm both ledger tables are enabled (and say so if not) before building?
 - Did I size the pull first, and tell the user if I used movement rows only or a shorter
   window?
-- Did I detect an EU-wide ledger and avoid duplicate sheets and double counting?
-- Did I page every export to completion (no silent truncation at 1,000 / 5,000 rows)?
+- Did I prove a shared EU ledger (totals + a record-level sample) before collapsing - and keep
+  marketplaces separate when the proof failed?
+- Did every partition fit in one page and match its size-check count (no `skip` paging over
+  tied rows)?
 - In the consolidated view, did I sum ending balances across all FC locations per FNSKU for the
   newest date, sellable only, and use one inventory snapshot date per SKU?
 - Did I state the window, the newest data date and any missing dates?
@@ -229,10 +251,13 @@ don't reconcile.
   (grouped by `fnsku`).
 - Treating `lost` / `damaged` as positive numbers (they are negative) - net lost comes out
   wrong.
-- Counting `Lost_Inbound` reimbursements against warehouse losses.
+- Counting `Lost_Inbound` reimbursements against warehouse losses, or subtracting reimbursements
+  approved in the window from the window's losses (different cohorts).
+- Paging a big pull with `skip` while ordering by `date` - tied rows get duplicated or lost.
+- Collapsing marketplaces on equal row counts alone.
 - Summing inventory snapshots across days, or adding the inbound sub-columns to
   `inbound_quantity` (it already contains them).
-- Truncating at the export row cap.
+- Truncating at the export row cap - partition instead.
 
 ## Notes
 

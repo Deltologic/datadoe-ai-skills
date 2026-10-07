@@ -51,8 +51,11 @@ Per month (12 full months by default), merged on the month:
   averaged or summed.
 - **Totals:** revenue cards (Shipped / Ordered Revenue) total all months shown. Every ad-based
   total - Ad Spend, Ad Revenue, TACoS, ACoS, ROAS, Net Rev After Ads, Impressions, Clicks - is
-  computed over **the months that have ad data only** and labelled with that range (e.g.
-  "Jun-Sep"), so a ratio never divides ad money by revenue from months without ads. Each card's
+  computed over **the dates that have ad data only** and labelled with that range (e.g. "14 Jun -
+  30 Sep"), so a ratio never divides ad money by revenue from days without ads. When ads start
+  mid-month, that month's revenue for the ad totals (and for its own TACoS / Net Rev After Ads
+  cells) is the revenue of the covered dates only (`first_ad_day` to month end), never the whole
+  month; days before the ads connection count as unknown, not as zero ad spend. Each card's
   badge compares the last full month with the month before (MoM).
 
 ## Configuration
@@ -106,6 +109,10 @@ Per month (12 full months by default), merged on the month:
 5. Download, merge by month, compute the derived metrics (ad metrics `null` where the month has
    no ad rows). Use `first_ad_day` to mark the first ads month "partial" and `last_day` to mark
    a month "provisional" when its vendor data stops before the month's end.
+   **Partial first ads month:** if `first_ad_day` isn't the 1st, run one more vendor export from
+   `first_ad_day` to that month's end (same sums, no `dateInterval`) and use that revenue for the
+   month's ad ratios and Net Rev After Ads, and in the ad-based totals. The month's Shipped and
+   Ordered Revenue rows still show the full month.
 6. Build the dashboard:
    - **Claude Cowork:** a live artifact - embed the merged months so it renders at once (label
      "Last snapshot {time}"); the Refresh button re-runs steps 3-5 through
@@ -177,14 +184,16 @@ A German vendor account whose ads were connected in mid-June: vendor revenue goe
 months, ads only from 14 June. Revenue cards (12 months): Shipped Revenue €781K, Ordered
 Revenue €781K - the two rows differ every month (September: €52.2K shipped vs €50.4K ordered).
 Ad cards (Jun-Sep only): Ad Spend €9.8K, Ad Revenue €77.2K, ROAS 7.86x, ACoS 12.7%, TACoS 4.1%,
-Net Rev After Ads €228K on €238K of Jun-Sep shipped revenue. The P&L table shows ad rows "-"
+Net Rev After Ads €228K on €238K of shipped revenue for 14 Jun - 30 Sep (June counted from the
+14th only). The P&L table shows ad rows "-"
 before June and June marked partial.
 
 ## Quality self-check
 
 - Is Ordered Revenue taken from `manufacturing_retail_ordered_revenue_amount` (not a copy of
   shipped revenue)?
-- Months without ad data shown as "-" (not 0), first ads month marked partial?
+- Months without ad data shown as "-" (not 0), first ads month marked partial, and its ad
+  ratios computed on revenue for the covered dates only?
 - Ratios recomputed from sums per month and for the totals?
 - Only the manufacturing view used? Currency from the data?
 - Last month marked provisional when run in the first days of a month?

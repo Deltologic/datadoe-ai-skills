@@ -81,11 +81,16 @@ threshold and emails you the result. Live from DataDoe.
 1. `sellers_and_vendors_list` -> ask which account / marketplace (e.g. UK or DE).
 2. `exports_sources_get` (query "campaign") -> resolve the source; `exports_source_get` to
    confirm the columns.
-3. **Top campaigns:** `exports_create`, last 30 days to yesterday, `groupBy ["ad_campaign_id",
-   "ad_campaign_name"]`, sum `ad_spend` (alias `spend_sum`) and `ad_sales` (`sales_sum`),
-   `orderByColumn sales_sum DESC`, `limit 10`, JSON. Merge rows per `ad_campaign_id` (a renamed
-   campaign comes back under two names - keep the newest name), then take the top 5. Show the
-   list (names, spend, sales, ACoS) and confirm it - or use the campaigns the user names.
+3. **Top campaigns - rank by ID first, names second:**
+   - Ranking: `exports_create`, last 30 days to yesterday, `groupBy ["ad_campaign_id"]` only,
+     sum `ad_spend` (alias `spend_sum`) and `ad_sales` (`sales_sum`), `orderByColumn sales_sum
+     DESC`, `limit 5`, JSON. Grouping by ID alone keeps a renamed campaign's sales together, so
+     the top 5 is right even when a campaign was renamed during the window.
+   - Names: a second export for those 5 IDs (filter `ad_campaign_id in`), `groupBy
+     ["ad_campaign_id", "ad_campaign_name"]`, max `date` (`last_seen`) - show the name with the
+     newest `last_seen`.
+   Show the list (names, spend, sales, ACoS) and confirm it - or use the campaigns the user
+   names.
 4. Ask for: the ACoS threshold (one for all, or per campaign), the time and time zone (e.g.
    daily 15:00 Europe/London), and the email address(es).
 5. Create the routine (Scheduling), then **run it once now** so the user gets the first email.
@@ -195,6 +200,8 @@ is the first row, marked OVER (+6.1pp). The next day all five are under -> "✅ 
 
 - Using the removed 14-day ad columns - the export fails.
 - Filtering by campaign name - a rename silently drops the campaign.
+- Applying the top-N limit to ID + name groups - a renamed campaign's sales are split and it
+  can fall out of the top 5. Rank by ID alone, then look up names.
 - Averaging daily ACoS values.
 - Skipping campaigns with spend but no sales (division by zero) - they are the worst ones.
 - Only emailing on breaches, so a broken routine looks like "all good".
