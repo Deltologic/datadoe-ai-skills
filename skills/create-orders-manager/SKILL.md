@@ -40,13 +40,13 @@ Determine your agent type before starting:
 
 - Display orders in a table with expandable nested rows for line items.
 - Parent row: `amazon_order_id`, `date`, `amazon_order_status`, `fulfillment_channel`, total item count, total price.
-- Child rows (expanded): `sku`, `child_asin`, `product_name`, `quantity`, `item_price_value`, `item_price_currency`, `item_status`.
+- Child rows (expanded): `sku`, `child_asin`, `product_name`, `quantity`, `item_price_value`, `item_price_currency`, `item_status` — keyed by `amazon_order_item_id` (`sku` can repeat within an order).
 - Client-side pagination with configurable page size (10/25/50).
 
 ### 3. Filters
 
 - **Date range**: date-from / date-to inputs. Default: last 30 days.
-- **Order status**: multi-select checkboxes. Values: `Pending`, `Unshipped`, `PartiallyShipped`, `Shipped`, `Canceled`, `Unfulfillable`, `InvoiceUnconfirmed`, `PendingAvailability`.
+- **Order status**: multi-select checkboxes. Values documented by the DataDoe scheme: `Pending`, `Unshipped`, `Shipped`, `Canceled`. Some marketplaces return `Shipped` / `Unshipped` with a marketplace-specific prefix (`Shipped*` / `Unshipped*`), so filter those two with `beginsWith` (never `=`); `Pending` and `Canceled` can use `=`.
 - Applying filters triggers a new export.
 
 ### 4. Order Tagging (Local)
@@ -140,6 +140,7 @@ Request body:
   "sourceId": "<id of amazon_order_items_with_cogs from GET /exports/sources>",
   "columns": [
     "amazon_order_id",
+    "amazon_order_item_id",
     "date",
     "amazon_order_status",
     "fulfillment_channel",
@@ -159,7 +160,7 @@ Request body:
 }
 ```
 
-To filter by status, add `filters`:
+To filter by status, add `filters`. Use `beginsWith` for `Shipped` and `Unshipped` so marketplace-prefixed variants (`Shipped*` / `Unshipped*`) are included; `=` is safe only for `Pending` and `Canceled`:
 
 ```json
 {
@@ -168,7 +169,7 @@ To filter by status, add `filters`:
     "rules": [
       {
         "field": "amazon_order_status",
-        "operator": "=",
+        "operator": "beginsWith",
         "value": "Shipped",
         "not": false
       },
@@ -212,6 +213,7 @@ Example row returned in the flat array:
   "seller_or_vendor_name": "DataDoe UK",
   "marketplace_country_name": "United Kingdom",
   "amazon_order_id": "203-5492174-4518714",
+  "amazon_order_item_id": "12345678901234",
   "sku": "341_SDA12D_117_FBA",
   "line_item_number": 0,
   "date": "2025-01-12",
@@ -230,7 +232,7 @@ For the full column reference, see: https://api.datadoe.com/api/v1/spec/data-sch
 
 ### Raw Data Shape & Client-Side Grouping Logic
 
-The `/raw` endpoint returns a **flat array of line items**. Each element represents one SKU within one order. An order with N distinct SKUs produces N rows all sharing the same `amazon_order_id`.
+The `/raw` endpoint returns a **flat array of line items**. Each element is one order item (`amazon_order_item_id`) within one order. An order with N order items produces N rows all sharing the same `amazon_order_id`; the same `sku` can appear on more than one of them.
 
 **CRITICAL — `columns: []` (empty array) does NOT return all columns.** It returns only seller-context metadata columns (seller id / name, marketplace, connection ids) and none of the Order Line Items fields (`amazon_order_id`, `sku`, `amazon_order_status`, etc.). Always specify the required columns explicitly. Every response also **prepends those utility columns** before your requested fields, so read values by **key/name, never by column position**.
 
@@ -239,40 +241,46 @@ The `/raw` endpoint returns a **flat array of line items**. Each element represe
 | Field                 | Level     | Notes                                                             |
 | --------------------- | --------- | ----------------------------------------------------------------- |
 | `amazon_order_id`     | Order     | Grouping key — unique per order                                   |
-| `amazon_order_status`        | Order     | Consistent across all rows for the same order                     |
+| `amazon_order_item_id` | Line item | Amazon's order-item id — unique per line, never null. **Use it as the row key** (TanStack `getRowId`). |
+| `amazon_order_status`        | Order     | Consistent across all rows for the same order. `Pending` / `Unshipped` / `Shipped` / `Canceled`; some marketplaces prefix `Shipped*` / `Unshipped*` |
 | `fulfillment_channel` | Order     | Consistent across all rows for the same order                     |
 | `date`                | Order     | Purchase date in the marketplace timezone. Use this for display and sorting. `order_date` duplicates `date`. |
-| `sku`                 | Line item | Unique product identifier within the order                        |
-| `line_item_number`    | Line item | 0-based index of the line item within the order                   |
+| `sku`                 | Line item | Seller SKU of the line. **Not unique within an order** — the same SKU can be a separate order item more than once, so never key rows by it |
+| `line_item_number`    | Line item | Occurrence index of the same SKU within the order (`0` for the first line of each SKU; increments only when that SKU repeats). **Not** the line's position in the order — do not use it to order or key lines |
 | `child_asin`          | Line item | Amazon ASIN                                                       |
 | `product_name`        | Line item | Full product name                                                 |
 | `item_status`         | Line item | Can differ from `amazon_order_status`                                    |
 | `quantity`            | Line item | Units for this SKU only                                           |
-| `item_price_value`    | Line item | **Line-item total value — already includes quantity; use as-is, do NOT multiply by `quantity`** |
-| `item_price_currency` | Line item | Consistent across all rows for the same order                     |
+| `item_price_value`    | Line item | **Line-item total value — already includes quantity; use as-is, do NOT multiply by `quantity`.** **Null on cancelled lines** (and on orders <4h old): coalesce to `0` and render "—" with a "cancelled" badge, never `NaN` |
+| `item_price_currency` | Line item | Consistent across the priced rows of an order; **null on cancelled lines** — take it from another line of the same order, else fall back to the marketplace currency |
 
 **How to build the parent (order) row from the flat array:**
 
 ```typescript
 // Group by amazon_order_id. Sort parent rows by date (purchase date).
 // item_price_value is already the line TOTAL - sum it as-is, never multiply by quantity.
+// item_price_value and item_price_currency are NULL on cancelled lines (and on orders <4h old):
+// coalesce the price to 0 and take the currency from the first line that has one, so a
+// cancelled line can never turn the order total into NaN.
 const ordersMap = new Map<string, OrderRow>();
 
 for (const item of lineItems) {
+  const linePrice = item.item_price_value ?? 0; // null on cancelled lines -> 0, never NaN
   const existing = ordersMap.get(item.amazon_order_id);
   if (existing) {
-    existing.lineItems.push(item);
-    existing.totalPrice += item.item_price_value; // line total, NOT × quantity
-    existing.itemCount += item.quantity;
+    existing.lineItems.push(item); // child rows are keyed by amazon_order_item_id, not sku
+    existing.totalPrice += linePrice; // line total, NOT × quantity
+    existing.itemCount += item.quantity ?? 0;
+    existing.currency ??= item.item_price_currency ?? null; // first non-null currency wins
   } else {
     ordersMap.set(item.amazon_order_id, {
       amazon_order_id: item.amazon_order_id,
       amazon_order_status: item.amazon_order_status, // order-level, consistent
       fulfillment_channel: item.fulfillment_channel, // order-level, consistent
       date: item.date, // purchase date in the marketplace timezone
-      currency: item.item_price_currency, // consistent per order
-      totalPrice: item.item_price_value, // line total, NOT × quantity
-      itemCount: item.quantity,
+      currency: item.item_price_currency ?? null, // null on cancelled lines; filled from a later line
+      totalPrice: linePrice, // line total, NOT × quantity
+      itemCount: item.quantity ?? 0,
       lineItems: [item],
     });
   }
@@ -280,6 +288,8 @@ for (const item of lineItems) {
 
 const orders = Array.from(ordersMap.values());
 // Sort by date descending. date is the purchase date. order_date is the same value.
+// If currency is still null (every line cancelled), fall back to the seller's marketplace
+// currency (e.g. GBP for Amazon.co.uk) and render the total as "—" with a "cancelled" badge.
 ```
 
 **Parent row columns to display:**
@@ -291,10 +301,10 @@ const orders = Array.from(ordersMap.values());
 | Status     | `amazon_order_status` (first item)           | Coloured badge         |
 | Channel    | `fulfillment_channel` (first item)    | Badge                  |
 | Items      | `sum(quantity)` across all line items | Number                 |
-| Total      | `sum(item_price_value)` (already line totals) | Formatted currency |
+| Total      | `sum(item_price_value ?? 0)` (already line totals; null on cancelled lines) | Formatted currency; "—" + "cancelled" badge when every line is null |
 | Tags       | localStorage only                     | Tag chips              |
 
-**Child (line item) row columns to display:**
+**Child (line item) row columns to display** (row key: `amazon_order_item_id` via TanStack `getRowId` — not `sku`, not the array index):
 
 | Column      | Source                                     |
 | ----------- | ------------------------------------------ |
@@ -302,7 +312,7 @@ const orders = Array.from(ordersMap.values());
 | ASIN        | `child_asin`                               |
 | Product     | `product_name`                             |
 | Qty         | `quantity`                                 |
-| Price       | `item_price_value` + `item_price_currency` |
+| Price       | `item_price_value` + `item_price_currency` ("—" when null, i.e. cancelled line) |
 | Item Status | `item_status`                              |
 
 **CRITICAL — API parameter formats discovered through testing:**
@@ -591,10 +601,10 @@ export default instance;
 ```typescript
 import client from "./client";
 
-// Canonical id (live-verified). Always prefer the id resolved from
-// GET /exports/sources; this is only a last-resort fallback. Confirm the exact id
-// form on the REST surface during testing.
-const ORDER_LINE_ITEMS_SOURCE_ID = "89b27535d2";
+// The Order Line Items source id is resolved at runtime from GET /exports/sources
+// by table name. Never hardcode it: ids differ between the REST and MCP surfaces and
+// can change; a stale id fails the export with FIELD/SOURCE errors.
+const ORDER_LINE_ITEMS_TABLE = "amazon_order_items_with_cogs";
 
 export async function fetchSellersAndVendors() {
   const response = await client.get<{ items: any[] }>(
@@ -612,11 +622,19 @@ export async function fetchOrderLineItemsSourceId(
       `/v1/exports/sources?sellerOrVendorIds=${sellerId}`
     );
     const orderSource = response.data.find(
-      (s: any) => s.name === "Order Line Items" && s.type === "SELLER_CENTRAL"
+      (s: any) =>
+        s.tableName === ORDER_LINE_ITEMS_TABLE ||
+        (s.name === "Order Line Items" && s.type === "SELLER_CENTRAL")
     );
-    return orderSource?.id ?? ORDER_LINE_ITEMS_SOURCE_ID;
-  } catch {
-    return ORDER_LINE_ITEMS_SOURCE_ID;
+    if (!orderSource?.id) {
+      throw new Error(
+        `Source ${ORDER_LINE_ITEMS_TABLE} not found for seller ${sellerId} - check the connection and the Data settings.`
+      );
+    }
+    return orderSource.id;
+  } catch (error) {
+    // Surface the failure in the UI; do not fall back to a hardcoded id.
+    throw error;
   }
 }
 
@@ -626,6 +644,7 @@ export async function fetchOrderLineItemsSourceId(
 // which causes the table to display empty rows.
 const ORDER_LINE_ITEMS_COLUMNS = [
   "amazon_order_id",
+  "amazon_order_item_id", // unique per line - the row key (sku can repeat within an order)
   "date",
   "amazon_order_status",
   "fulfillment_channel",
@@ -667,7 +686,10 @@ export async function createExport(
       combinator: "or",
       rules: orderStatusFilters.map((status) => ({
         field: "amazon_order_status",
-        operator: "=",
+        // Shipped / Unshipped have marketplace-prefixed variants (Shipped*, Unshipped*):
+        // match them with beginsWith. Pending / Canceled are exact values.
+        operator:
+          status === "Shipped" || status === "Unshipped" ? "beginsWith" : "=",
         value: status,
         not: false,
       })),

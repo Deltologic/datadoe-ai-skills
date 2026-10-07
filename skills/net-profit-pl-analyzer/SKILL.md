@@ -33,9 +33,9 @@ profit is leaking, live from DataDoe. Runs in chat, no spreadsheet.
 ## The framework. Sales is vanity, profit is sanity
 
 Work top-down, then find the leaks:
-1. **COGS gate (check first)** - if `cogs_total` is 0 for all / nearly all SKUs, COGS
-   isn't configured; every profit/margin below is overstated (really just
-   sales - fees - ad spend). Lead with a prominent warning (see workflow) before any
+1. **COGS gate (check first)** - if `cogs_present` is false on most of the sales in the
+   window (step 7), COGS isn't configured; every profit/margin below is overstated (really
+   just sales - fees - ad spend). Lead with a prominent warning (see workflow) before any
    number is trusted.
 2. **Headline** - total sales, total profit, blended margin %, units.
 3. **Winners** - top SKUs by profit (not sales) - where the money really is.
@@ -72,7 +72,9 @@ Work top-down, then find the leaks:
   (`cost_item_value`, `cost_item_shipping_value`, `cost_currency`). It is not converted.
   If `cost_currency` is not the marketplace currency, convert `cogs_total` before you
   compare it with sales, and state the rate. A margin near 100% usually means COGS
-  was not uploaded.
+  was not uploaded - but it can also come from fee reversals / reimbursements posting
+  without matching sales in the window (a negative `fees_sum`), so check the sign of
+  `fees_sum` before blaming COGS; a negative fee total is a timing artifact, not a margin.
 - **Window: use a full month or longer.** Fees post on settlement date, so a few days
   or one week can misstate margin. Flag a SKU whose margin looks extreme and check
   it is not a settlement-timing artifact.
@@ -90,32 +92,53 @@ Work top-down, then find the leaks:
    - `aggregations` (sum): `total_sales`, `profit`, `total_cost`, `ad_spend`,
      `total_fees`, `cogs_total`, `total_units_sold`
    Do NOT sum `acos` / `tacos` / `roi`. Recompute margin as profit / sales.
-4. **SKU ranking:** `exports_create` on `amazon_profit_by_sku_and_date` for the same
-   window:
+4. **SKU ranking - one complete per-SKU aggregate:** `exports_create` on
+   `amazon_profit_by_sku_and_date` for the same window:
    - `groupBy`: `["sku","product_name","currency"]`
    - `aggregations` (sum): `total_sales`, `profit`, `total_cost`, `ad_spend`,
      `total_fees`, `cogs_total`, `total_units_sold` - give each a **distinct alias**
      (e.g. `sum(profit) as profit_sum`, never `as profit`, which errors `ALIAS_COLLISION`).
-   - `orderByColumn` the profit-sum alias (`profit_sum`), `DESC`; `limit` ~200.
+   - CSV, `limit 5000`, `orderByColumn sku`; page with `skip` until a page returns fewer
+     rows (caps: JSON 1,000 rows, CSV 5,000). Drop rows whose `sku` is null (account-only
+     ad rows). Rank the winners and evaluate every leak rule (step 9) on this full set in
+     code.
+   - Do not pull a top-N or bottom-N instead. A DESC list cannot contain a loss on a large
+     account (2,932 SKUs in a month: the top 1,000 by profit had no negatives). A `having
+     profit_sum < 0` / ASC list holds only losses, so it never shows a profitable SKU whose
+     margin is under the floor or whose ad spend exceeds its profit - on one UK month that
+     was 770 profitable SKUs under the 15% floor (153 of them with ad spend above profit),
+     GBP 138k of sales, beside 999 loss-making SKUs.
    Do NOT sum `acos` / `tacos` / `roi` (they are ratios) - recompute them from the summed
    columns if needed (e.g. margin % = profit / sales).
 5. If COGS looks wrong, `exports_create` on `amazon_cogs` and read `cost_currency`,
    `cost_item_value`, and `cost_item_shipping_value` for the SKUs in question.
 6. Poll `exports_get` (patiently - profit exports can stay `PENDING` for minutes), then
    `exports_raw_download`.
-7. **COGS-config gate (before trusting any margin):** read the `cogs_present` column. If it
-   is false for all / nearly all SKUs, COGS is not loaded for this account - put a prominent
-   warning at the top of the output ("COGS not configured; margins are overstated / not true
-   net profit") and label margins accordingly. Profit ranking still works; the margin figures
-   do not. Use `cogs_present`, not `sum(cogs_total) = 0`, for this gate.
+7. **COGS-config gate (before trusting any margin):** `cogs_present` is a LOGIC column, so
+   it cannot be aggregated (`min`/`max` on it error `INVALID_AGGREGATE`) and is not readable
+   from the grouped step-4 exports. Run one small dedicated `exports_create` on
+   `amazon_profit_by_sku_and_date` for the window: `groupBy ["cogs_present","currency"]`,
+   `aggregations` `sum(total_sales) as sales_sum`, `count(sku) as row_count`. Gate = share
+   of sales on the `cogs_present = true` row (observed: 98.6% true / 1.4% false; `null` rows
+   carry no shipped item and zero sales - ignore them). If `cogs_present = false` carries
+   more than ~50% of sales, COGS is not loaded for this account - put a prominent warning at
+   the top of the output ("COGS not configured; margins are overstated / not true net
+   profit") and label margins accordingly; otherwise print `[!] COGS present on {x}% of
+   sales` when the share is below ~95%. Profit ranking still works; the margin figures do
+   not. Use `cogs_present`, not `sum(cogs_total) = 0`, for this gate.
 8. **Settlement-lag guard (recent windows):** fees post on settlement cycles, so a fresh SKU
-   can show fees > sales (or fees with ~no sales) - a timing artifact, not a real loss. Flag
-   any SKU whose fee/sales ratio is implausible in a short window as "settlement lag -
-   recheck after settlement" rather than a real leak.
-9. Headline numbers come from step 3 only. Flag SKU leaks from step 4: `profit < 0`,
-   `ad_spend` above profit, or SKU margin < 0.5x the account margin. When the account margin
+   can show fees > sales (or fees with ~no sales) - a timing artifact, not a real loss. Run
+   this check over the leak candidates from the step-4 set and flag any SKU whose fee/sales ratio is
+   implausible in a short window as "settlement lag - recheck after settlement" rather than
+   a real leak.
+9. Headline numbers come from step 3 only. Flag SKU leaks from the full step-4 set,
+   profitable SKUs included: `profit < 0`, `ad_spend` above profit, or SKU margin < 0.5x
+   the account margin. When the account margin
    is <= 0 or degenerate (COGS missing, loss-making window), use an **absolute ~15% margin
    floor** instead of the 0.5x multiple - a multiple of a negative baseline is meaningless.
+   List leaks by money at stake - the loss for negative SKUs, the shortfall to the floor
+   (`floor x sales - profit`) for thin ones - give the count per rule, and on a large
+   catalog show the top ones and say how many more there are.
    Say that SKU ad spend omits Sponsored Brands and other campaign types that are in the
    account `ad_spend`.
 10. Render the card.
@@ -124,7 +147,8 @@ Work top-down, then find the leaks:
 
 ```
 Net Profit - {marketplace} - {from}..{to}
-[!] COGS NOT CONFIGURED - margins below are overstated, NOT true net profit   (only when cogs_total = 0 account-wide)
+[!] COGS NOT CONFIGURED - margins below are overstated, NOT true net profit   (only when cogs_present = false carries most of the sales, step 7)
+[!] COGS present on {x}% of sales   (when the step-7 share is below ~95%)
 Sales {cur}{sales}   Profit {cur}{profit}   Margin {m}%   Units {u}
 
 Top profit SKUs
@@ -132,7 +156,7 @@ Top profit SKUs
 1  {sku}                      {cur}..   {cur}..   {m}%     {cur}..
 ...
 
-Profit leaks (fix first)
+Profit leaks (fix first)   ({n} losses · {t} under the margin floor · {a} ad spend > profit - full SKU set; top {k} by money shown)
 - {sku}: {why - negative profit / ad spend > margin / net margin < 15%}
   -> {action: raise price / cut bid / check COGS / discontinue}
 Settlement-lag (recheck, not real losses): {sku(s) with fees > sales in an unsettled window}
@@ -156,9 +180,13 @@ settlement-lag timing artifacts), is the point.
 - Did the headline come from `amazon_profit_by_date`, not a sum of SKU profit?
 - Did I rank SKUs by profit, not sales?
 - Did I recompute margin/ACoS from summed columns (never sum a ratio)?
-- Did I sanity-check suspiciously high margins for missing COGS?
-- Did I check account-level COGS (`cogs_total`=0 across SKUs) and lead with a prominent
-  warning when it's absent - not just a per-SKU footnote?
+- Did I evaluate every leak rule on the complete, paged per-SKU aggregate, so profitable
+  SKUs under the margin floor or with ad spend above profit are flagged too, not only
+  losses?
+- Did I sanity-check suspiciously high margins for missing COGS - and check the sign of
+  `fees_sum` first (negative = fee reversals / reimbursements, not missing COGS)?
+- Did I run the dedicated `cogs_present` export (share of sales with COGS) and lead with a
+  prominent warning when COGS is absent - not just a per-SKU footnote?
 - Did I flag settlement-lag SKUs (fees > sales in a recent window) as timing artifacts,
   not real losses?
 - Did I apply an absolute margin floor (~15%) so the leak flag still works when blended
@@ -174,7 +202,14 @@ settlement-lag timing artifacts), is the point.
 - Filtering posted fees away with `order_date`, or sending `groupBy: []`.
 - Reporting sales as "profit". Use the `profit` column from `amazon_profit_by_date`.
 - Treating a 99% margin as real - usually COGS was not uploaded, or `cost_currency`
-  is not the marketplace currency.
+  is not the marketplace currency, or `fees_sum` is negative (fee reversals posted
+  without matching sales).
+- Reading leaks off a top-N or bottom-N export - a DESC list holds no loss on a large
+  account, and a `having profit_sum < 0` / ASC list holds only losses, missing every
+  profitable SKU under the margin floor (770 on one UK month, GBP 138k of sales). Evaluate
+  the rules on the full paged SKU set.
+- Trying to aggregate `cogs_present` in the grouped SKU export - it is a LOGIC column
+  (`INVALID_AGGREGATE`); use the dedicated `groupBy [cogs_present, currency]` export.
 - Ignoring ad spend - a SKU can be profitable before ads and a loss after. SKU
   `ad_spend` still misses Sponsored Brands; the account figure does not.
 - Burying account-wide missing COGS in a footnote - if `cogs_present` is false the whole

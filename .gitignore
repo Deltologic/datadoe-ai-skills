@@ -2,3 +2,6 @@ node_modules/
 coverage/
 .DS_Store
 runs/
+
+# Local working folders for agent sessions (may hold seller data)
+desks/
