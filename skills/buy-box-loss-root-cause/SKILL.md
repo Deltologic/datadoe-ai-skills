@@ -173,7 +173,10 @@ Report the first gate that fails, biggest-revenue SKU first.
    - **(c) 30-day sales per ASIN (ranking input):** `from`/`to` = the 30 calendar days
      ending yesterday, independent of the anchor - say the dates; `groupBy [child_asin,
      product_name]`, `sum(total_sales)`, `sum(total_units_sold)`; sum per `child_asin` in
-     code if an ASIN comes back on two rows. Keep ASINs with `total_units_sold > 0` - a
+     code if an ASIN comes back on two rows (one page on a ~3,300-ASIN account; a larger
+     catalog runs it as `groupBy [child_asin]` with `orderByColumn child_asin` - unique -
+     and takes product names from the flagged-ASIN exports). Keep ASINs with
+     `total_units_sold > 0` - a
      **flag precondition, not just a ranking input**: variation parents carry traffic and
      never sell, and without this filter 3 of the 4 ASINs that cleared the traffic floor in
      one test were parents showing a fake 100% loss. No traffic columns in this shape - a
@@ -218,11 +221,17 @@ Report the first gate that fails, biggest-revenue SKU first.
      seller's landed price (price + shipping) next to yours, and any second offer of your
      own (an FBM SKU on the same ASIN, sometimes cheaper than the FBA one). State
      `last_seen_at`.
-   - **(c) Stockout sweep, latest snapshot:** `from = to = latest date`, filter `available =
-     0 AND units_shipped_t30 > 0` (about 90 rows on a UK account), then pull the latest
-     snapshot for those ASINs **and** the flagged ASINs (`child_asin in (...)`, one
-     export). An ASIN is out of stock when every SKU with a non-null `available` is 0.
-     Keep the ones with 30-day sales in (c) of step 3 and report them as stock rows
+   - **(c) Stockout sweep, latest snapshot:** `from = to = latest date`, filter
+     `available = 0` and the marketplace - **no velocity predicate**: Amazon's
+     `units_shipped_t30` can read 0 on a SKU whose ASIN really sold (on one UK snapshot 43
+     selling ASINs were fully out of FBA stock with `units_shipped_t30 = 0`) - columns
+     `sku`, `child_asin`, `available`, `inbound_quantity`, CSV `limit 5000`,
+     `orderByColumn sku` (one row per SKU per snapshot, so the order is unique; page with
+     `skip` if it fills - 3,827 rows = 1 page on that account). Keep the ASINs that sold in
+     step 3c (`total_units_sold > 0`) - the real sales decide, not Amazon's velocity -
+     then pull the latest snapshot for those ASINs **and** the flagged ASINs (`child_asin
+     in (...)`, in chunks if the list is long) to check their other SKUs: an ASIN is out of
+     stock when every SKU with a non-null `available` is 0. Report those as stock rows
      whatever their buy-box read: an ASIN that ran out often drops to 0 page views (one
      account's best stock catch went from 30-45 page views a day to 0), so no traffic floor
      can ever admit it, and a 100% read on the anchor day can sit on the last unit. If
@@ -317,8 +326,9 @@ have flagged. Same signal, different fix - the skill picks the right one.
 - Did I check the offers before naming a cause on a matched price - "another seller at your
   price" only when such an offer exists, "box not always shown" when I am alone or
   cheapest?
-- Did I run the stockout sweep on every selling ASIN, not only the flagged ones, and expose
-  the full 30-day sales on a current stockout?
+- Did I run the stockout sweep on every zero-stock SKU without a velocity filter, keep the
+  ASINs that really sold (step 3c), check their sibling SKUs, and expose the full 30-day
+  sales on a current stockout?
 - Did I use the defined thresholds and the pinned 30-day window (ending yesterday)?
 - Did I check price, offers and stock before blaming "fulfilment"?
 - Did I rank by revenue at risk across losses, sharing and stock rows, not by lowest bb%?
@@ -346,6 +356,8 @@ have flagged. Same signal, different fix - the skill picks the right one.
   offers first.
 - Checking stock only for flagged ASINs - an ASIN that ran out loses its page views, so it
   never reaches the flag list; sweep today's stockouts on every selling ASIN.
+- Pre-filtering the stockout sweep on `units_shipped_t30 > 0` - Amazon's velocity can read
+  0 on a SKU whose ASIN really sold; let the profit-table sales decide.
 - Dropping null-`sku` rows on the anchor day - a selling ASIN with traffic and no sale that
   day comes back that way, and a total loss is exactly that.
 - Pulling the 7-day trend only for already-flagged ASINs - circular with the 7-day floor.
