@@ -120,8 +120,14 @@ the top spenders.
    - **(a) Candidates, term grain:** `groupBy ["ad_search_term", "ad_campaign_id",
      "ad_group_id"]`, sum `ad_spend`, `ad_clicks`, `ad_orders`, `ad_sales` with distinct
      aliases (`spend_sum`, `clicks_sum`, `orders_sum`, `sales_sum`), `having clicks_sum >=
-     10`, sorted by `spend_sum DESC`, `limit` 5,000; page with `skip` until a page returns
-     fewer rows. This is the negative's own grain: a negative is added per ad group and
+     10`, `limit` 5,000; sort by spend in code. If it can exceed one page, do **not** page
+     with `skip` on spend or term - the backend sorts by one column and none is unique at
+     this grain, so rows can be read twice or never. Split by ad group instead, as the
+     Watchdog's step 3a does: a size map (`groupBy ["ad_campaign_id", "ad_group_id"]`,
+     `countDistinct(ad_search_term)`), whole ad groups packed into chunks of at most 5,000
+     terms, one export per chunk with `ad_group_id in (...)`; an ad group above 5,000 terms
+     alone is ordered by `ad_search_term` (unique inside one ad group) and paged with
+     `skip` from 0. This is the negative's own grain: a negative is added per ad group and
      blocks the term for every keyword and target there, so zero orders must hold across
      all of them. Never add keyword, status or name columns to this `groupBy` - one term
      then splits into one row per matched keyword or target, and a term that converts
@@ -131,8 +137,9 @@ the top spenders.
      "ad_campaign_id", "ad_group_id", "ad_keyword", "ad_keyword_id", "ad_match_type",
      "ad_keyword_status", "ad_campaign_status"]` (+ `ad_campaign_name` / `ad_group_name`
      for the report), the same sums plus `max(date) as last_seen`, filter `ad_group_id in
-     (...)` for the candidate ad groups from (a); page with `skip` if a page fills. It
-     returns every term in those ad groups (1,647 rows for three ad groups on one UK
+     (...)` for the candidate ad groups from (a), in chunks of ad groups that each fit one
+     page (if a chunk returns exactly 5,000 rows, split it - no `skip`, this grain has no
+     unique order). It returns every term in those ad groups (1,647 rows for three ad groups on one UK
      account); to shrink it, also filter `ad_search_term in (...)` for the candidate terms
      - the `in` value is a comma-separated list, so a term that itself contains a comma
      needs its own `=` filter. Join to (a) on `(ad_campaign_id, ad_group_id,
@@ -157,9 +164,12 @@ the top spenders.
      wrongly suppress the candidate as "already negated".
    - **Read that snapshot only:** `from` = `to` = that date, filter `ad_campaign_type =
      SPONSORED_PRODUCTS` and `ad_campaign_id in (...)` for the candidates' campaigns,
-     columns `date`, `ad_campaign_id`, `ad_group_id`, `ad_keyword_text`, `ad_match_type`,
-     `ad_keyword_state`, CSV, `orderByColumn ad_keyword_id` (stable pages), page with
-     `skip` until a page returns fewer rows, then keep the rows with `ad_keyword_state =
+     columns `date`, `ad_keyword_id`, `ad_campaign_id`, `ad_group_id`, `ad_keyword_text`,
+     `ad_match_type`, `ad_keyword_state`, CSV, `orderByColumn ad_keyword_id` - it must be
+     among the selected columns (the backend rejects the request otherwise with
+     `FIELD_NOT_FOUND: Order by column ... must be in selected columns, group by, or
+     aggregations`) and it is unique within one snapshot, so `skip` pages are stable - page
+     until a page returns fewer rows, then keep the rows with `ad_keyword_state =
      ENABLED`. Even filtered to the candidates' campaigns
      this can run to thousands of rows (14,965 for 27 campaigns on one UK account - three
      CSV pages); dedupe only after reading every page.
@@ -257,7 +267,9 @@ null`. On "apply", the negative is added and future spend on that term stops.
   Watchdog hand-off, use its list as given and still run dedupe, live state and dry run?
 - Did I find candidates from the grouped term-grain export (search term + campaign + ad
   group), never from ungrouped daily rows truncated at 5,000, and never with keyword or
-  status columns in that `groupBy`?
+  status columns in that `groupBy` - and if it needed more than one page, in ad-group
+  chunks rather than `skip` pages on spend?
+- Did I select `ad_keyword_id` in the dedupe export, since it is the `orderByColumn`?
 - Did I exclude / flag ASIN-target terms (`b0...`) so I don't kill competitor targeting?
 - Did I use `matchType: EXACT` / `PHRASE` / `BROAD` + `negative: true` (never `NEGATIVE_*`)?
 - Did I keep each negative in its own campaign/ad group (ids from the data)?
