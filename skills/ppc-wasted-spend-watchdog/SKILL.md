@@ -117,10 +117,12 @@ modifier you checked in the recommendation.
     `max(date)` per campaign);
     `amazon_ads_campaigns_raw.ad_campaign_state` and `amazon_ads_ad_groups_raw.ad_group_state`
     (current snapshot, **refreshed every 72 hours** - good enough for this read-only report;
-    the campaign export that step 6 pulls anyway covers every bucket, and one extra export
-    filtered `ad_group_id in (...)` covers the ad groups in the dead and negate buckets).
-    The `*_raw` Ads tables cap at **100 rows JSON / 250 CSV**: page with `skip` and dedupe
-    on the id (one account returned 235 rows for 206 campaigns); `AMAZON_ADS_CAMPAIGNS_FIND` / `AMAZON_ADS_AD_GROUPS_FIND` (live - the applier's
+    the campaign export that step 6 pulls anyway covers every bucket, and exports filtered
+    `ad_group_id in (...)` cover the ad groups of every bucket - step 6b). The `*_raw` Ads
+    tables cap at **100 rows JSON / 250 CSV**: page the campaign export with
+    `orderByColumn ad_campaign_id` (selected) and dedupe on it - duplicate rows share the
+    id, so the order is complete at campaign level (one account returned 235 rows for 206
+    campaigns); pull ad groups in chunks of up to 250 ids, one export each; `AMAZON_ADS_CAMPAIGNS_FIND` / `AMAZON_ADS_AD_GROUPS_FIND` (live - the applier's
     job before any write, not needed here).
   - `Keyword Targeting Performance` (`amazon_ads_targeting_by_campaign_by_date`) - your bid keywords, for the
     keyword-level view. It carries **no bid column** - current bids come from
@@ -143,10 +145,11 @@ modifier you checked in the recommendation.
   `filters` stay pre-aggregation). Use it to pull the dead bucket in one call:
   `having clicks_sum >= 10 AND orders_sum = 0`. Bleeders need ACoS, which is a ratio -
   compute that client-side from the summed columns.
-- **Row caps and pagination:** 1,000 rows per JSON export, 5,000 per CSV. A spend-sorted
-  pull keeps the big terms; the `having` export keeps the dead ones (in testing all 35 dead
-  terms were on page 1 by spend anyway). Paginate with `skip` in `limit` steps only when a
-  page returns exactly `limit` rows and you need the remainder.
+- **Row caps and pagination:** 1,000 rows per JSON export, 5,000 per CSV. Page with `skip`
+  only when the export is ordered by a column that is unique in it (and selected - the
+  backend rejects an `orderByColumn` that is not in the columns, `groupBy` or
+  aggregations); otherwise split the request with a filter into chunks that each fit one
+  page (step 3a). The `having` export of the dead bucket is small (42 rows on one account).
 - Currency/marketplace: read `marketplace_country_code`; localise (e.g. a German marketplace
   = EUR). The seller list can name the UK marketplace `UK` while tables use `GB`.
 - Window: "last N days" = the N complete days ending yesterday - say the dates. Sponsored
@@ -169,12 +172,21 @@ modifier you checked in the recommendation.
    `ad_clicks`, `ad_orders`, `ad_sales` with distinct aliases (`spend_sum`, `clicks_sum`,
    `orders_sum`, `sales_sum`). Three exports:
    - **(a) Money, term grain:** `groupBy ["ad_search_term", "ad_campaign_id",
-     "ad_group_id"]` (keep the ids - the apply skills need them to target), sorted by the
-     spend alias `DESC`, `limit` 5,000 CSV, for the top spenders and bleeders. If it returns
-     exactly `limit` rows and you need the tail, page with `skip` - and then order the
-     pages by `ad_search_term` instead of spend (equal spend values can shift rows across
-     page boundaries) and sort by spend in code; check that the paged spend adds up to the
-     share-of-spend denominator.
+     "ad_group_id"]` (keep the ids - the apply skills need them to target), CSV `limit`
+     5,000; sort by spend in code. **Page only on a unique order.** The backend sorts by
+     one column, and no single column is unique at this grain: spend ties, and a term
+     shared by several ad groups, can move rows across a `skip` boundary - some read
+     twice, others never - and a spend checksum does not catch two swapped rows of equal
+     spend. So first pull a **size map** on the same table, window and filter: `groupBy
+     ["ad_campaign_id", "ad_group_id"]`, `countDistinct(ad_search_term) as terms` (one row
+     per ad group; 651 ad groups on one UK account). If the terms add up to 5,000 or
+     fewer, one export of (a) is complete. Otherwise pack whole ad groups into chunks of at
+     most 5,000 terms and run (a) once per chunk with `filters: ad_group_id in (...)` -
+     each chunk is one page, no `skip` (one UK account: 48,412 terms in 60 days, about 10
+     chunks; its largest ad group held 4,852 terms). An ad group that alone exceeds 5,000
+     terms gets its own export ordered by `ad_search_term` - unique inside one ad group -
+     and paged with `skip` from 0. The chunk spend should add up to the share-of-spend
+     denominator: a sanity check, not a proof.
    - **(b) Dead bucket, term grain:** the same `groupBy` with `having clicks_sum >= 10 AND
      orders_sum = 0` - the complete dead bucket. Never add keyword, target, status or name
      columns to (a) or (b) (grain rule in Configuration).
@@ -183,8 +195,10 @@ modifier you checked in the recommendation.
      "ad_keyword", "ad_keyword_id", "ad_match_type", "ad_keyword_status",
      "ad_campaign_status"]` (+ `ad_campaign_name` / `ad_group_name` if wanted), the same
      sums plus `max(date) as last_seen`, filter `ad_group_id in (...)` for the candidates'
-     ad groups, CSV, page with `skip` if a page fills. It returns every term in those ad
-     groups (1,647 rows for three ad groups on one UK account); to shrink it, also filter
+     ad groups, CSV - in chunks of ad groups that each fit one page (use the size map; if
+     a chunk returns exactly 5,000 rows, split it and re-run - no `skip`, this grain has no
+     unique order). It returns every term in those ad groups (1,647 rows for three ad
+     groups on one UK account); to shrink it, also filter
      `ad_search_term in (...)` for the candidate terms - the `in` value is a
      comma-separated list, so a term that itself contains a comma needs its own `=`
      filter. Join it to the candidates on
@@ -215,16 +229,20 @@ modifier you checked in the recommendation.
 6. For each campaign you would cut or negate, pull placement performance, the raw
    campaign bid adjustments, and `amazon_ads_audiences_by_date` as in the modifier
    checks above. Name the placement or audience that should be left alone.
-6b. **Resolve state for every bucket:** campaign state for all rows - dead, negate and
-   trim - from the `amazon_ads_campaigns_raw` export of step 6 (`ad_campaign_id`,
-   `ad_campaign_state`; page and dedupe as in Configuration), and ad-group state for the
-   dead and negate buckets from `amazon_ads_ad_groups_raw` (`ad_group_id`,
-   `ad_group_state`, `ad_campaign_id`, filter `ad_group_id in (...)`). Both are 72-hour
-   snapshots - say so. Mark rows `(paused)` when the campaign or the ad group is not
-   ENABLED, add the line "of which in paused campaigns or ad groups: {cur}{x} (not
-   actionable)" - the paused share of the whole wasted total, every bucket including watch
-   - and drop them from **both** hand-off lists. The headline total stays as
-   measured; the actionable figure is the live subset.
+6b. **Resolve state for every bucket** - dead, negate, trim, watch and own keyword:
+   campaign state from the `amazon_ads_campaigns_raw` export of step 6 (`ad_campaign_id`,
+   `ad_campaign_state`; ordered and deduped as in Configuration), and ad-group state for
+   the ad groups of **all** those rows from `amazon_ads_ad_groups_raw` (`ad_group_id`,
+   `ad_group_state`, `ad_campaign_id`, `filters: ad_group_id in (...)` in chunks of up to
+   250 ids, one export per chunk; if a chunk returns 250 rows, split it). A trim term in an
+   ENABLED campaign but a PAUSED ad group is paused too. Both are 72-hour snapshots - say
+   so. Mark a row `(paused)` when its campaign **or** its ad group is not ENABLED, and
+   apply both checks before computing the actionable figure and before routing any row:
+   add the line "of which in paused campaigns or ad groups: {cur}{x} (not actionable)" -
+   the paused share of the whole wasted total, every bucket including watch - and drop
+   paused rows from **both** hand-off lists (dead and negate to the applier, trim and own
+   keyword to the bid optimizer). The headline total stays as measured; the actionable
+   figure is the live subset.
 7. Render, biggest spend first; show the top 10 of each bucket and the count of the rest.
    Hand off **live campaigns and ad groups only, own keywords removed**: dead terms and
    negate bleeders to `ppc-negative-keyword-applier` (it negates them as handed over, with
@@ -287,8 +305,11 @@ opposite decisions - the skill separates the two.
 - Did I compute ACoS and the bleeder split client-side (ratios are never summed)?
 - Did I separate own-keyword terms (term == `ad_keyword`, positive match type) from the
   negatives and route them to the bid optimizer?
-- Did I exclude paused campaigns and ad groups from the negatives hand-off, report their
-  subtotal, and say the raw state tables are 72-hour snapshots?
+- Did I resolve campaign **and** ad-group state for the rows of every bucket (trim, watch
+  and own keyword included), drop paused rows from both hand-offs, report the subtotal, and
+  say the raw state tables are 72-hour snapshots?
+- Did I pull the money export in one page or in ad-group chunks that each fit one page -
+  never `skip` pages on spend or term, which are not unique at this grain?
 
 ## Common mistakes
 
@@ -303,7 +324,10 @@ opposite decisions - the skill separates the two.
 - Confusing search term (shopper query) with keyword (your bid).
 - Summing the ACoS column - recompute it.
 - Judging from a single truncated pull - caps are 1,000 rows JSON / 5,000 CSV; use the
-  `having` export for the dead bucket and `skip` pagination if a page fills to `limit`.
+  `having` export for the dead bucket and ad-group chunks for the money export.
+- Paging with `skip` on a column that is not unique (spend, or a term shared by several ad
+  groups), or switching the sort order between pages - rows get read twice or never.
+  Page only on a unique order, and select the `orderByColumn`.
 - Treating a 0-row `amazon_ads_audiences_by_date` export as "no audience modifiers" - the
   table is empty for some marketplaces; say the check was skipped.
 - Negating ASIN-target (`b0...`) terms - that's competitor targeting, not junk.
