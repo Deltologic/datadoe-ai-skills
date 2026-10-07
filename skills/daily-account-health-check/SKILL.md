@@ -8,6 +8,8 @@ description: >-
   in chat, no dashboard. Use when the user asks about "account health", "is my
   account ok", "AHR", "account health rating", "am I at risk of suspension", "order
   defect rate", "late shipment rate", "policy violations", or a "daily account check".
+  For a daily sales, profit and ads report posted to Slack, use Daily Performance Health
+  Check instead.
 metadata:
   author: DataDoe
   check-more-skills-at: https://app.datadoe.com/hub/ai-agents-and-skills
@@ -16,7 +18,6 @@ metadata:
   category: Account Health
   interface: mcp
   output: report
-  youtube-video-embed-url: https://www.youtube.com/embed/2-zIMOAQj84?si=VZ4csDGoIqKUBMKN
 ---
 
 # Daily Amazon Account Health Check
