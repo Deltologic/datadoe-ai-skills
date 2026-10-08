@@ -57,9 +57,10 @@ exactly what to set.
    configuration row. Per ASIN, `amazon_promotion_items` carries Amazon's own eligibility
    `issues` - read them before you reason about rules yourself.
 2. **True cost vs lift** - per promotion: **cost** = Amazon's fees (the fee snapshot on the
-   promotion: `upfront_fee_amount` + `variable_fee_pct` x promo revenue, capped at
-   `variable_fee_cap_amount`; coupons also report `budget_spent`, which already includes
-   fees and the discount) + the **discount given** (coupon `total_discount`; for deals the
+   promotion: `upfront_fee_amount` x the charged periods per `upfront_fee_frequency` +
+   `variable_fee_pct` x promo revenue, capped at `variable_fee_cap_amount`, applied **once
+   per promotion** after the ASIN roll-up; coupons also report `budget_spent`, which
+   already includes fees and the discount) + the **discount given** (coupon `total_discount`; for deals the
    price gap x `product_units_sold`). **Lift** = promo-window units and profit on the same
    ASINs from `amazon_profit_by_sku_and_date` against a trailing baseline (28 clean days
    before the deal), and the 14-day **hangover** after it. Rank by incremental profit after
@@ -190,19 +191,26 @@ exactly what to set.
     to 714 days); events are reviewed as a group (same `event_id`) and individually.
   - **Baseline:** the 28 days ending 2 days before `start_date`, **minus** any day the ASIN
     was in another promotion (from the calendar) - if fewer than 14 clean days remain,
-    widen to 56 and say so. Baseline daily units = clean-day mean. In practice: when a
-    second deal wave overlaps the baseline (two waves 11 days apart on one account), pull
-    the clean sub-window as its own export (18 clean days) and divide by 18, not 28.
+    widen to 56 and say so. Baseline daily units = clean-day mean. "Another promotion"
+    is decided from the **ASIN/day promotion coverage map** (step 6a), built from the
+    performance tables for the whole baseline-to-hangover span plus the calendar - not
+    from the calendar alone, which only holds live promotions and the last 30 days while
+    a review reaches back 90-714 days and the mirror lacks older deals. In practice: when
+    a second deal wave overlaps the baseline (two waves 11 days apart on one account),
+    pull the clean sub-window as its own export (18 clean days) and divide by 18, not 28.
   - **Hangover:** the 14 days after `end_date` (skip if the deal ended less than 14 days
     ago; say "hangover not yet measurable"); drop ASINs that were in another promotion
     during those 14 days - their hangover is contaminated, say how many.
   - **30-day price floor:** the 30 calendar days ending yesterday.
 - Thresholds (use these words in the output):
   - **Paid off** = incremental profit after fees > 0; **break-even** = within +-5% of 0;
-    **lost money** = < 0. Incremental profit = promo-window `profit` on the ASIN minus
-    baseline daily profit x promo days minus fees not already in the profit table (see
-    step 6) minus the hangover shortfall (baseline daily profit x 14 minus hangover
-    `profit`, floored at 0 when the hangover was better than baseline).
+    **lost money** = < 0. Incremental profit **per promotion** = the sum over its ASINs of
+    (promo-window `profit` minus baseline daily profit x promo days minus the hangover
+    shortfall: baseline daily profit x 14 minus hangover `profit`, floored at 0 when the
+    hangover was better than baseline) **minus the promotion fee once** (step 6d: settled,
+    else snapshot, else unavailable). A promotion whose fee is unavailable gets its
+    verdict "before deal fees", never "paid off". A promotion with COGS gaps in its
+    windows (step 6c) is **provisional** and says "before COGS on {share}% of units".
   - **Lift** = promo-window daily units / baseline daily units; print it as "x2.4". An
     ASIN with 0 baseline units has no lift ("n/a - no baseline sales"); all its promo
     units count as incremental. Report how many deal ASINs had no baseline (one UK event:
@@ -212,7 +220,9 @@ exactly what to set.
     existing per-unit loss - fix price or cost first", not merely "lost money".
   - **COGS plausibility:** `cogs_total_value` / `listing_price_value` >= 0.85 on a SKU
     (one 6-pair set carried COGS GBP 9.50 against a GBP 9.99 price) = "check the COGS
-    upload" - print the verdict with that flag instead of trusting the margin.
+    upload" - print the verdict with that flag instead of trusting the margin. This is a
+    sanity flag on today's cost; it says nothing about **historical coverage**, which
+    comes from `cogs_present` in the window exports (step 6c).
   - Coupon **budget alarm:** `budget_percentage_used` >= 80 on a RUNNING coupon;
     **exhausted** at >= 100 (the coupon stops showing).
   - Coupon **redemption rate** = `redemptions` / `clips`; below 10% = "clipped, not
@@ -239,18 +249,35 @@ exactly what to set.
   Reference-price tightening (US, April 23 and May 18, 2026): List Price / Typical Price
   must be supported by real sales; an ASIN that sold below its non-promotional median on
   50%+ of the last 90 days loses the strike-through, and any deal shows no savings badge.
-- Fees (**read the snapshot first**: `upfront_fee_amount` + `variable_fee_pct` x promo
-  revenue, capped at `variable_fee_cap_amount` - observed UK deal: GBP 12 + 1% cap GBP 600,
-  DE deal: EUR 16 + 1% cap EUR 1,000, coupons GBP 2 / EUR 4 / CAD 2 + 1%; the published US
-  schedule is the fallback only for promotions without a snapshot or for plans before a
-  draft exists, verified October 2026):
+- Fees - three sources, in this order, and the output names which one it used:
+  1. **Snapshot** on the promotion row (`amazon_promotions`): fee = `upfront_fee_amount` x
+     charged periods + min(`variable_fee_pct` x promo revenue, `variable_fee_cap_amount`).
+     Charged periods follow `upfront_fee_frequency`: `ONE_TIME` = 1; a per-day frequency =
+     the chargeable days of the promotion (end - start, in local days). Observed: UK deal
+     GBP 12 `ONE_TIME` + 1% cap GBP 600 (Prime Big Deal Days 2026), DE deal EUR 16 + 1% cap
+     EUR 1,000, coupons GBP 2 / EUR 4 / CAD 2 `ONE_TIME` + 1%. The snapshot is what Amazon
+     previewed **for that promotion** - never carry it over to an older or a different
+     event.
+  2. **Settled** fee rows in `amazon_settlements_with_cogs` (step 6d) when they can be
+     matched to the promotion.
+  3. **Published schedule** for the **same marketplace, promotion type, event and
+     effective date** - only for a promotion without a snapshot and without settled rows,
+     or for a plan before a draft exists. The skill ships one verified schedule, the US
+     one below; for any other marketplace with no snapshot, the fee is **"unavailable
+     pending confirmation"** and the verdict is reported before fees. Never apply the US
+     amounts to GBP / EUR / CAD promotions, with or without conversion - the UK and DE
+     snapshots above differ materially from the US schedule.
 
-  | Type (US) | Upfront | Variable | Cap |
+  | Type (Amazon US store, verified October 2026) | Upfront | Variable | Cap |
   | --- | --- | --- | --- |
-  | Best / Lightning Deal, non-peak (since 2 Jun 2025) | $70 per deal | 1.0% of deal sales | $2,000 |
-  | Best / Lightning Deal / Prime Exclusive Discount, peak event (2026 Prime Big Deal Days, Black Friday week) | $100 per promotion (minus $50 early submission) | 1.5% of promotional sales | $5,000 |
+  | Best Deal / Lightning Deal, non-peak days (since 2 Jun 2025) | **$70 per day** of the deal (a 7-day Best Deal = $490; Best Deals run 1-14 days) | 1.0% of deal sales | $2,000 per deal on the variable part |
+  | Prime Day 2025: Prime Exclusive Best Deal / Lightning Deal / Price Discount | flat $1,000 / $500 / $100 per campaign (no per-day, no variable fee) | - | - |
+  | Prime Big Deal Days and Black Friday week 2026: Best / Lightning Deal, Prime Exclusive Discount | $100 per promotion (minus $50 early submission) | 1.5% of promotional sales | $5,000 |
   | Coupon (since 1 Jun 2025) | $5 per coupon | 2.5% of coupon-attributed sales | $2,000 on the variable part (coupons created from 5 Nov 2025) |
 
+  Sources: Amazon's 2025 fee announcement in Seller Central (per-day wording for the
+  non-peak deal fee, Prime Day 2025 flat rates, coupon fee) and the 2026 peak-event
+  announcements. Print the date of the schedule next to every estimated fee.
 - Currency/marketplace: localise from `revenue_currency` / `currency_code` /
   `upfront_fee_currency` (a German marketplace = EUR). The seller list can name the UK
   marketplace `UK` while table columns use `GB` - accept either.
@@ -274,34 +301,44 @@ exactly what to set.
    `upfront_fee_amount`, `upfront_fee_currency`, `variable_fee_pct`,
    `variable_fee_cap_amount`, `latest_revision_status`, `last_synced_at`, `issues`. Count by
    type x status; group event deals under their `event_id` (one UK account: 146 RUNNING
-   Prime Big Deal Days deals = one line, not 146). Then **flagged ASINs**:
-   `amazon_promotion_items`, filter `issues notNull`, columns `promotion_id`, `asin`,
-   `sku`, `issues` (13 rows on a 300-promotion account - small). Parse `issues[].code` and
-   `message`; join `promotion_id` to the calendar for the title and dates. Every
-   `severity: ERROR` row is a "needs attention" line with Amazon's message quoted
-   verbatim - "Price 11.33 above maximum of 7.12" is the deal-price ceiling Amazon
-   computed, print it as the fix.
+   Prime Big Deal Days deals = one line, not 146). Include `selection_type` in the
+   columns. Then **selection membership**: `amazon_promotion_items`, filter `promotion_id
+   in (...)` for every calendar promotion with `selection_type = ITEMS` (chunk the list;
+   one row per promotion x ASIN, `issues` is **null on healthy items**, so never filter
+   on `issues` for membership), columns `promotion_id`, `asin`, `sku`, `benefit_percent_off`,
+   `benefit_amount_off`, `benefit_fixed_price`, `issues`. This map feeds the overlap check
+   (step 7) and the join fallback (step 4c). A promotion with `selection_type = CATALOG`
+   has no item rows: treat it as covering **every** ASIN of the account for overlap and
+   say so in the output. **Flagged ASINs** are the subset with `issues` not null (13 rows
+   on a 300-promotion account): parse `issues[].code` and `message`; join `promotion_id`
+   to the calendar for the title and dates. Every `severity: ERROR` row is a "needs
+   attention" line with Amazon's message quoted verbatim - "Price 11.33 above maximum of
+   7.12" is the deal-price ceiling Amazon computed, print it as the fix.
 4. **Deal performance - the promotion list first, then the ASIN detail:**
    - **(a)** `amazon_promotion_performance`, filter `start_date_time between` (review
      window start - 30 days, today) and `promotion_status != CANCELED`, `groupBy
-     [promotion_id, promotion_name, promotion_type, promotion_status, start_date_time,
-     end_date_time, revenue_currency]`, `max(glance_views) as promo_glance_views`,
+     [promotion_id, promotions_api_mapping_id, promotion_name, promotion_type,
+     promotion_status, start_date_time, end_date_time, revenue_currency]` (text columns
+     are grouped, never aggregated), `max(glance_views) as promo_glance_views`,
      `max(units_sold) as promo_units`, `max(revenue) as promo_revenue`,
      `countDistinct(asin) as asins` (`max`, not `sum`: the promotion totals repeat per
      ASIN row; aliases must not equal column names). Keep promotions whose
      `end_date_time` falls in the review window. One row per deal - fits any cap (35 rows
      for four months on a UK account).
-   - **(b)** per-ASIN detail for those promotions: columns `promotion_id`, `asin`,
-     `product_name`, `product_glance_views`, `product_units_sold`, `product_revenue`,
-     `product_revenue_currency`, filter `promotion_id in (...)` in chunks that stay under
+   - **(b)** per-ASIN detail for those promotions: columns `promotion_id`,
+     `promotions_api_mapping_id`, `asin`, `product_name`, `product_glance_views`,
+     `product_units_sold`, `product_revenue`, `product_revenue_currency`, filter
+     `promotion_id in (...)` in chunks that stay under
      the cap (one UK account: 78 approved deals = 2,024 ASIN rows; CSV `limit 5000`,
      chunk the `in` list so no chunk exceeds it - rows per promotion are known from (a)).
      Unit price at the deal = `product_revenue` / `product_units_sold` (null when 0 units).
-   - **(c)** join to the calendar: `promotions_api_mapping_id` = `promotion_id` of
-     `amazon_promotions` when present, else `promotion_name` = `promotion_title` and
-     `start_date_time` within one day of `start_date` and a shared ASIN. Take the fee
-     snapshot from the matched row; unmatched deals get the published schedule and the
-     label "fee estimated (no snapshot)".
+   - **(c)** join to the calendar: `promotions_api_mapping_id` (carried from (a)/(b)) =
+     `promotion_id` of `amazon_promotions` when present, else `promotion_name` =
+     `promotion_title`, `start_date_time` within one day of `start_date`, and a shared
+     ASIN between the (b) rows and the step 3 selection membership. Take the fee snapshot
+     from the matched row. Unmatched deals: settled fee rows if step 6d finds them, else
+     the published schedule **of that marketplace and event** if the skill has a verified
+     one, else "fee unavailable pending confirmation" (verdict before fees).
 5. **Coupon performance:** `amazon_coupon_performance`, filter `start_date_time between`
    (window start - 365 days, today) and `end_date_time >= window start`, columns
    `coupon_id`, `coupon_name`, `start_date_time`, `end_date_time`, `customer_segment`,
@@ -314,63 +351,119 @@ exactly what to set.
    alarm. Coupon fees = `budget_spent` - `total_discount` (Amazon folds clip / redemption /
    performance fees into `budget_spent`); cross-check the monthly settlement coupon fee
    columns when they are non-zero.
-6. **Lift, margin and hangover** (`amazon_profit_by_sku_and_date`, for the ASINs of the
-   reviewed deals and coupons; the per-ASIN list comes from steps 4b / 5):
-   - **Promo window:** `from` = `start_date`, `to` = `end_date` (dates in the marketplace
-     zone; a UTC `23:00` start is the next local day), **no ASIN filter**, `groupBy
-     [child_asin]`, `sum(total_units_sold) as units_sum`, `sum(total_sales) as
-     sales_sum`, `sum(profit) as profit_sum`, `sum(ad_spend) as ads_sum`,
-     `max(total_page_views) as pv_max`, CSV `limit 5000`, `orderByColumn child_asin` ->
-     one export per promotion window (deals in the same event share one window - one
-     export for all of them), joined to the deal ASINs in code.
-   - **Baseline:** `from`/`to` = the 28 clean days before the deal (Configuration),
-     same shape; if a baseline day overlaps another promotion on the ASIN, drop that day
-     and divide by the clean-day count, never by 28.
-   - **Hangover:** `from` = `end_date` + 1, `to` = `end_date` + 14, same shape, only when
-     the 14 days have passed. Three windows x two waves = six exports on one account, each
-     ~3,100 rows.
-   - Per ASIN: lift = (promo units / promo days) / (baseline units / clean days);
-     incremental units = promo units - baseline daily x promo days; incremental profit =
-     promo `profit` - baseline daily `profit` x promo days - **fees not in the table** -
-     hangover shortfall. Fees not in the table: the fee snapshot estimate (upfront +
-     variable, capped) **unless** `amazon_settlements_with_cogs` shows non-zero
-     `deal_participation_fee` / `deal_performance_fee` for the window (then the profit
-     table already contains them - do not subtract twice; say which case applies). Coupon
-     fees live in `budget_spent`; check the settlement coupon fee columns the same way.
-     Promo units from the profit table are usually **higher** than
-     `product_units_sold` (non-Prime buyers, other offers): report both and attribute the
-     lift to the promotion only on the promo-priced units.
-   - Roll up per promotion (sum the ASINs) and per event; rank by incremental profit after
-     fees; label Paid off / break-even / lost money.
+6. **Lift, cost coverage, hangover and fees** (`amazon_profit_by_sku_and_date` for the
+   ASINs of the reviewed deals and coupons - the per-ASIN list comes from steps 4b / 5 -
+   plus the settlement fee rows):
+   - **(a) Promotion coverage map, ASIN x day:** for the span from the earliest baseline
+     start to the latest hangover end, list every promotion that touched it - the
+     performance table (`amazon_promotion_performance` filtered `start_date_time <= span
+     end` and `end_date_time >= span start`, grouped as in 4a, then its ASIN rows as in
+     4b; `amazon_coupon_performance` the same way on `start_date_time` / `end_date_time`)
+     plus the calendar and its selection membership from step 3 (CATALOG selections cover
+     every ASIN). Mark each ASIN/day that falls inside any of them. This is the only way
+     to know that a baseline day was clean: the calendar alone misses historical deals.
+   - **(b) Windows per ASIN:** promo window = `start_date`..`end_date` (local days; a UTC
+     `23:00` start is the next local day); baseline = the 28 days ending 2 days before the
+     start **minus** the ASIN's marked days; hangover = the 14 days after the end, only
+     once they have passed, minus marked days. Group ASINs by identical clean-day set -
+     usually two or three patterns (clean, overlapped by the previous wave, overlapped by
+     the next). Export shape per pattern window: **no ASIN filter**, `groupBy
+     [child_asin]`, `sum(total_units_sold) as units_sum`, `sum(total_sales) as sales_sum`,
+     `sum(profit) as profit_sum`, `sum(sales_tax) as tax_sum`, `sum(total_selling_fees) as
+     referral_sum`, `sum(ad_spend) as ads_sum`, `max(total_page_views) as pv_max`, CSV
+     `limit 5000`, `orderByColumn child_asin` (~3,100-3,300 rows on a UK account, one
+     page), joined to the deal ASINs in code. A pattern whose clean days are not one
+     contiguous range is pulled as its sub-ranges (one export each) and summed; when that
+     would take more than four exports, pull those ASINs by day instead: `groupBy [date,
+     child_asin]`, filter `child_asin in (...)` (that smaller set only), CSV `limit 5000`,
+     and drop the marked days in code. Divide by the clean-day count, never by 28.
+   - **(c) COGS coverage:** run each window export a second time with the filter
+     `cogs_present = false` (same shape) -> per ASIN the units, sales and profit that
+     carry **no uploaded cost**; rows with `cogs_present` null are fee-only rows with no
+     shipped or returned unit (one UK window: 3,097 such ASIN rows, 0 units) and are not
+     missing cost. Uncovered share = uncovered units / all units for the promotion's
+     ASINs (that window: 188 of 21,783 units, 0.9%, on 93 ASINs). Any uncovered unit in
+     a promo, baseline or hangover window makes the promotion's verdict **provisional**,
+     printed "before COGS on {share}% of units"; the plausibility flag on today's
+     `cogs_total_value` does not replace this check.
+   - **(d) Fees, reconciled once per promotion:** pull `amazon_settlements_with_cogs` for
+     the span with `from`/`to` and the filter (combinator `or`) `deal_participation_fee !=
+     0`, `deal_performance_fee != 0`, `coupon_participation_fee != 0`,
+     `coupon_performance_fee != 0`, `coupon_redemption_fee != 0`; columns `date`,
+     `transaction_posted_date`, `settlement_type`, `sku`, `child_asin`, `amazon_order_id`
+     and the five fee columns (18 rows in a year on one UK account). These rows are
+     **account-level**: `sku` is empty, `child_asin` is null and `amazon_order_id` carries
+     the **promotion id** (observed: a coupon's `coupon_participation_fee` of GBP -2 and
+     its `coupon_performance_fee` posted weekly on Fridays under `amazon_order_id` equal to
+     the coupon's `promotion_id`). Because they have no ASIN they are **never inside the
+     ASIN profit subtotals** of `amazon_profit_by_sku_and_date` - they sit in
+     `amazon_profit_by_date` only. So: match the rows to the promotion by
+     `amazon_order_id` = `promotion_id` (or the mapping id); settled fee = their sum
+     (sign flipped). Completeness: upfront part = snapshot `upfront_fee_amount` x periods
+     and variable part within 10% of `variable_fee_pct` x promo revenue -> "settled"; a
+     smaller amount -> "partially posted" (use the larger of settled and snapshot and say
+     so); no rows and a snapshot -> "snapshot"; neither -> "unavailable". Subtract the
+     fee **once at promotion level** after summing the ASINs (allocate to ASINs only for a
+     per-ASIN view, by promo-priced revenue share, and say so). Coupon fees live in
+     `budget_spent` (= `total_discount` + fees); reconcile them against the settled
+     coupon rows the same way, by `promotion_id`.
+   - **(e) Per ASIN:** lift = (promo units / promo days) / (baseline units / clean days);
+     incremental units = promo units - baseline daily x promo days; ASIN contribution =
+     promo `profit` - baseline daily `profit` x promo days - hangover shortfall. Promo
+     units from the profit table are usually **higher** than `product_units_sold`
+     (non-Prime buyers, other offers): report both and attribute the lift to the
+     promotion only on the promo-priced units.
+   - **(f) Roll up per promotion** (sum the ASIN contributions, subtract the fee from (d)
+     once) and per event; rank by incremental profit after fees; label Paid off /
+     break-even / lost money, with "before deal fees" when the fee is unavailable and
+     "before COGS on {share}%" when (c) found gaps.
 7. **Rules pre-check for a planned promotion** (only when the user names an ASIN or a
    list, a type and a price or % off; otherwise skip to the output):
    - **Price floor (primary):** `amazon_order_items_with_cogs`, `from`/`to` = the 30 days
      ending yesterday, filter `child_asin in (...)` (the planned ASINs, a short list),
-     `quantity = 1` and `item_status != Canceled`, `groupBy [child_asin]`,
-     `min(item_price_value) as min_price`, `max(item_price_value) as max_price`,
-     `count(amazon_order_item_id) as n_lines` -> the lowest unit price a buyer saw from
-     you in 30 days, before coupon discounts. Then check which SKU set it:
-     `amazon_listings_with_cogs` for the ASIN - on one account the floor of a GBP 4.99 FBA
-     ASIN was GBP 3.49, the seller's own merchant-fulfilled SKU on the same ASIN; a deal
-     price above your own cheaper offer fails Amazon's check. When a coupon ran in the
-     window, subtract its `discount_amount` from the min price of those days and say so.
+     `quantity > 0` and `item_status != Canceled`, `groupBy [date, child_asin, quantity]`,
+     `min(item_price_value) as min_line`, `count(amazon_order_item_id) as n_lines` -> unit
+     price per row = `min_line` / `quantity` (a two-unit line of GBP 6.98 is a GBP 3.49
+     unit price), one row per day, ASIN and quantity bucket (140 rows for two busy ASINs
+     over 30 days). Keep the date: it is what ties a price to a coupon. **Coupon
+     conversion:** for every row whose date falls inside a coupon on that ASIN (coverage
+     map, step 6a, with the coupon's `discount_type` / `discount_amount` from
+     `amazon_coupon_performance` or the calendar), the paid unit price is unit x (1 -
+     `discount_amount` / 100) for `PERCENT_OFF_LIST_PRICE` and unit - `discount_amount`
+     for `AMOUNT_OFF_LIST_PRICE` - never subtract a percent figure as money (a 20% coupon
+     on a GBP 30 item gives a GBP 24 paid price, not GBP 10). Two floors come out:
+     - **paid floor** = the minimum over all rows after coupon conversion - the Best /
+       Lightning Deal and Prime Exclusive Discount basis;
+     - **non-promotional floor** = the minimum over rows on days with **no** promotion on
+       the ASIN (coverage map) - the Price Discount basis.
+     Then check which SKU set the floor (`amazon_listings_with_cogs` for the ASIN): on one
+     account the floor of a GBP 4.99 FBA ASIN was GBP 3.49, the seller's own
+     merchant-fulfilled SKU on the same ASIN; a deal price above your own cheaper offer
+     fails Amazon's check. No rows in 30 days = "insufficient own price history", not a
+     pass.
    - **Price floor (cross-check, optional):** `amazon_settlements_with_cogs`, same
      window, filter `child_asin in (...)` and `settlement_type != REFUND`, `groupBy
      [child_asin, settlement_type, amazon_order_id]`, `sum(item_price) as ip_sum`,
      `sum(promotion_item_price) as pip_sum`, `sum(quantity) as qty_sum` -> paid unit
-     price = (`ip_sum` + `pip_sum`) / `qty_sum`; the coupon-adjusted paid price. Discard
-     unit prices below 50% of the current listing price (split postings: four busy ASINs
-     produced floors of a quarter of the price) and expect the 5,000-row cap on busy
-     ASINs (page with `skip`). **Both are your own sales only.** Amazon's rule uses the
-     lowest customer-paid price across all sellers and its own reference-price model - a
-     pass here is necessary, not sufficient; the authoritative answer is the `issues` row
-     once the promotion is drafted in Seller Central.
-   - **Discount rule:** compare the planned price with the floor and the current
-     `listing_price_value`: Best / Lightning Deal needs planned <= floor and >= 15% off
-     the reference (use the current price as the proxy and say so); Price Discount needs
-     >= 5% off the non-promotional floor and >= 5% off the current price; coupons 5-50%.
-   - **Overlap:** any RUNNING / UPCOMING / PROCESSING promotion on the ASIN in the calendar
-     (deals and coupons both count; Amazon's code is `HAS_OVERLAPPING_PROMOTIONS`).
+     price = (`ip_sum` + `pip_sum`) / `qty_sum`, the settlement view of the coupon-adjusted
+     paid price. Discard unit prices below 50% of the current listing price (split
+     postings: four busy ASINs produced floors of a quarter of the price) and expect the
+     5,000-row cap on busy ASINs (page with `skip`). **Both floors are your own sales
+     only.** Amazon's rule uses the lowest customer-paid price across all sellers and its
+     own reference-price model - a pass here is necessary, not sufficient; the
+     authoritative answer is the `issues` row once the promotion is drafted in Seller
+     Central.
+   - **Discount rule:** compare the planned price with the floors and the current
+     `listing_price_value`: Best / Lightning Deal needs planned <= **paid floor** and >=
+     15% off the reference (use the current price as the proxy and say so); Prime
+     Exclusive Discount the same on a 60-day paid floor (widen the export); Price
+     Discount needs >= 5% off the **non-promotional floor** and >= 5% off the current
+     price; coupons 5-50%.
+   - **Overlap:** any RUNNING / UPCOMING / PROCESSING promotion whose selection membership
+     (step 3; CATALOG = every ASIN) contains the ASIN and whose dates touch the planned
+     window (deals and coupons both count; Amazon's code is `HAS_OVERLAPPING_PROMOTIONS`).
+     A healthy multi-ASIN deal has null `issues` on its items - it is found through the
+     membership map, not through the flagged list.
    - **Budget (coupons):** expected redemptions = baseline daily units x expected lift x
      days x the account's median redemption rate; needed budget = redemptions x (discount
      per unit + per-redemption fee) + upfront fee.
@@ -379,15 +472,27 @@ exactly what to set.
      `listing_status`, `listing_fulfillment_channel`, `cogs_total_value`, `cogs_present` ->
      cover ratio (Configuration). A Lightning Deal with cover < 1 on the committed quantity
      is a "will sell out" note, not a failure.
-   - **Margin:** profit per unit at the promo price = planned price - COGS
-     (`cogs_total_value`) - per-unit fees and ads (baseline `profit` per unit solved back:
-     baseline unit profit = baseline `profit` / baseline units, so unit cost ex price =
-     baseline unit price - baseline unit profit) - the variable fee %; subtract the upfront
-     fee once across the expected units. Below the margin floor = "lost money at this
-     price"; print the break-even price. Run the COGS plausibility check first
-     (Configuration): a FAIL on margin with implausible COGS is "check COGS", not "do not
-     run the deal". Where baseline unit profit is already negative at full price, say so -
-     the deal is not the problem.
+   - **Margin - one cost decomposition, COGS counted once:** from the ASIN's 28-day
+     baseline export (step 6b shape, with `tax_sum` and `referral_sum`): baseline unit
+     price `p_b` = `sales_sum` / `units_sum`; tax share `t` = `tax_sum` / `sales_sum` (0 in
+     US / CA, ~1/6 in the UK where prices include VAT); referral rate `r` = `referral_sum`
+     / `sales_sum`; unit profit `u_b` = `profit_sum` / `units_sum`; **other unit cost**
+     `c` = `p_b` x (1 - `t` - `r`) - `u_b` - this already holds COGS, FBA, ads, refunds and
+     fixed fees, so `cogs_total_value` is **not** subtracted again (it serves only the
+     plausibility flag). Expected units `n` = baseline daily units x expected lift x days.
+     At the planned price `P`:
+     unit profit = `P` x (1 - `t` - `r` - `variable_fee_pct`) - `c` - upfront fee x
+     periods / `n`; break-even `P*` = (`c` + upfront x periods / `n`) / (1 - `t` - `r` -
+     `variable_fee_pct`). The variable fee is a rate on revenue and enters only
+     multiplied by `P`; the upfront fee enters once, spread over `n`. Say which fee
+     source the rates come from (snapshot / schedule / unavailable - then show the margin
+     before fees). With no baseline units (new ASIN): `c` = `cogs_total_value` +
+     `listing_estimated_per_item_referral_fee` from the listing, flagged "cost from
+     listing, no baseline", and `r` = 0 because the referral fee is already in `c`.
+     Below the margin floor = "lost money at this price"; print `P*`. Run the COGS
+     plausibility check first: a FAIL on margin with implausible COGS is "check COGS", not
+     "do not run the deal". Where `u_b` is already negative at full price, say so - the
+     deal is not the problem.
    - Verdict per ASIN: PASS / CHECK (passes your data, Amazon's verdict pending) / FAIL
      (which rule, by how much), and the fix (price to set, promotion to end first, units to
      send in, budget to set).
@@ -405,9 +510,9 @@ Needs attention ({n}):
 - Coupon "{coupon_name}": budget {pct}% used, {cur}{remaining} left, ends {end} -> {top up / let it lapse}
 
 Deals ended in the window, by incremental profit after fees:
-Promotion                  Type       Days  ASINs  Promo units (promo-priced)  Lift   Base unit profit  Discount given  Fees ({snapshot|settled|est.})  Incremental profit  Verdict
+Promotion                  Type       Days  ASINs  Promo units (promo-priced)  Lift   Base unit profit  Discount given  Fees ({settled|snapshot|schedule {date}|unavailable})  Incremental profit  Verdict
 {title}                    BEST_DEAL  7     12     1,240 (1,105)               x2.6   +{cur}..          {cur}..        {cur}.. (upfront {cur}.. + {pct}% of {cur}..)  +{cur}..   paid off
-{title}                    BEST_DEAL  14    420    10,469 (9,558)              x1.85  -{cur}..          {cur}..        {cur}.. (est., no snapshot)       -{cur}..   amplified an existing per-unit loss (hangover -{cur}..){ · check COGS on {n} SKUs}
+{title}                    BEST_DEAL  14    420    10,469 (9,558)              x1.85  -{cur}..          {cur}..        unavailable (no snapshot, no settled rows, no {marketplace} schedule)  -{cur}.. before deal fees   amplified an existing per-unit loss (hangover -{cur}..){ · before COGS on {share}% of units}{ · check COGS on {n} SKUs}
 {title}                    LIGHTNING  1     1      80 (80)                     x3.1   +{cur}..          {cur}..        {cur}..                          -{cur}..   lost money (hangover -{cur}..)
 Event {event_id} / wave {start}..{end}: {n} deals, {cur}{revenue} promo revenue, {cur}{fees} fees, incremental profit {+/-}{cur}.. - {n} paid off, {n} lost money · {k} of {m} deal ASINs had no baseline sales (lift n/a) · hangover excludes {j} ASINs in a later deal
 
@@ -416,10 +521,10 @@ Coupon                     Type      ASINs  Clips  Redeemed (rate)  Discount    
 {name}                     STANDARD  1      412    198 (48%)        {cur}..     {cur}..   {cur}..          {cur}..       64%          paid off
 {name}                     S&S       3      96     4 (4%)           {cur}..     {cur}..   {cur}..          {cur}..       100% - exhausted  clipped, not bought
 
-Costs this window: fees {cur}.. (deals {cur}.. + coupons {cur}..; settlement fee columns {cur}.. - {"not posted here, snapshot used" | "match"}) · discounts given {cur}.. · promo revenue {cur}..
+Costs this window: fees {cur}.. (deals {cur}.. + coupons {cur}..; settled rows matched by promotion id {cur}.. - {"complete" | "partially posted" | "none posted"}; {n} promotions with fee unavailable) · discounts given {cur}.. · promo revenue {cur}..
 
 Plan check - {type} on {n} ASINs at {price | pct off}, {start}..{end}:
-ASIN        Current   30d floor (own; SKU that set it)   Planned  Rule                       Overlap            Stock cover   Unit profit after fees  Verdict
+ASIN        Current   30d floor (own; paid / non-promo; SKU that set it)   Planned  Rule                       Overlap            Stock cover   Unit profit after fees (break-even)  Verdict
 {asin}      {cur}..   {cur}.. ({sku})                     {cur}..  >= 15% off & <= floor: ok  none               1.8x          +{cur}..                PASS (Amazon verdict pending)
 {asin}      {cur}..   {cur}.. (own FBM {sku})             {cur}..  planned > floor by {cur}.. "{other promo}" running  0.6x  -{cur}..          FAIL - price; end {promo} first; break-even {cur}..
 {asin}      {cur}..   {cur}..                             {cur}..  ok                         none               5.2x          -{cur}.. (COGS {cur}.. on a {cur}.. price)  CHECK COGS before deciding
@@ -439,18 +544,23 @@ cannot be in a deal yet), three `PRICE_THRESHOLD_NOT_MET` quoting a maximum of 7
 against an 11.33 price (the seller sets 7.12 or drops the ASIN), one
 `HAS_OVERLAPPING_PROMOTIONS`, one `BUDGET_THRESHOLD_NOT_MET`, one `PRODUCT_NOT_AVAILABLE`.
 The review of the 17 Best Deals that ended in the last 90 days (two waves, 16-30 August
-and 28 August-4 September; none in `amazon_promotions`, so fees estimated from the
-snapshot rates) shows one brand deal of 420 ASINs doing GBP 63.6k of promo revenue at a
-x1.85 lift with 9,558 promo-priced units out of 10,469 sold in the window - and every one
-of the 17 reading "lost money", GBP 17.2k in total, because baseline unit profit was
-already negative on the big brands: the deals amplified an existing per-unit loss, and
-one hero SKU carried COGS of GBP 9.50 against a GBP 9.99 price, so the verdict is "check
-the COGS upload", not "stop running deals". The plan check for a 20% Best Deal on three
-of those ASINs: two pass the price rule against their own 30-day floor (GBP 8.32 and
-5.41), one fails because the seller's own merchant-fulfilled SKU on the same ASIN sold at
-GBP 3.49 against a planned 3.99 - end or reprice that offer first - and all three lose
-money per unit at the deal price until the cost side is fixed. Stock cover is 5x or more
-on all three, so stock is not the constraint.
+and 28 August-4 September; none in `amazon_promotions`, no settled deal-fee rows in the
+span, and no verified UK schedule for August - so every fee reads "unavailable" and the
+verdicts are **before deal fees**) shows one brand deal of 420 ASINs doing GBP 63.6k of
+promo revenue at a x1.85 lift with 9,558 promo-priced units out of 10,469 sold in the
+window - and every one of the 17 negative before fees, GBP 16.3k in total, because
+baseline unit profit was already negative on the big brands: the deals amplified an
+existing per-unit loss. COGS coverage in the promo window was 99.1% of units (188
+uncovered units on 93 small ASINs), so the verdicts are provisional only on those. One
+hero SKU carried COGS of GBP 9.50 against a GBP 9.99 price, so its line says "check the
+COGS upload", not "stop running deals". The plan check for a 20% Best Deal on three
+of those ASINs: two pass the price rule against their own 30-day paid floor (GBP 8.32
+and 5.41, from single- and multi-unit lines alike), one fails because the seller's own
+merchant-fulfilled SKU on the same ASIN sold at GBP 3.49 against a planned 3.99 - end or
+reprice that offer first - and all three lose money per unit at the deal price on the
+single cost decomposition (VAT share 1/6, referral 17.7% of sales on this account) until
+the cost side is fixed. Stock cover is 5x or more on all three, so stock is not the
+constraint.
 
 ## Quality self-check
 
@@ -460,8 +570,22 @@ on all three, so stock is not the constraint.
   ASIN row) and `sum()` only the `product_*` columns?
 - Did I exclude CANCELED performance rows from results but count them in the calendar?
 - Did I quote Amazon's `issues` messages verbatim and let them override my rule table?
-- Did I state the fee source for every promotion (snapshot / settled / estimated) and
-  avoid subtracting a fee twice when settlements already carry it?
+- Did I state the fee source for every promotion (settled / snapshot / schedule with its
+  date / unavailable), multiply a per-day upfront fee by the chargeable days, keep the
+  variable cap separate, and subtract the fee once per promotion after the ASIN roll-up?
+- Did I match settled fee rows by `amazon_order_id` = promotion id and treat them as
+  account-level (outside the ASIN subtotals), never as "already in ASIN profit"?
+- Did I refuse to apply the US schedule to a GBP / EUR / CAD promotion, or a current
+  snapshot to an older event?
+- Did I build the ASIN x day coverage map from the performance tables for the whole span
+  before calling a baseline day clean?
+- Did I run the `cogs_present = false` pass on every window and mark provisional verdicts?
+- Did I carry `promotions_api_mapping_id` through 4a/4b, and pull selection membership for
+  every calendar promotion (not only flagged items), with CATALOG = every ASIN?
+- Did I convert coupon discounts by type and date before taking the paid floor, keep the
+  non-promotional floor separate, and include multi-unit lines (unit = line / quantity)?
+- Did I count COGS once in the margin (`c` from the baseline), apply the variable fee as a
+  rate on `P`, and derive break-even from the same formula?
 - Did I compute the baseline on clean days only, and skip the hangover when it is not yet
   measurable?
 - Did I say "own sales only" next to the 30-day floor and "Amazon verdict pending" on
@@ -500,7 +624,28 @@ on all three, so stock is not the constraint.
   deals - 2,000+ rows; list the promotions first, then fetch the ASIN rows per chunk.
 - Computing the 30-day floor from per-order settlement sums - split postings produce unit
   prices of a quarter of the real price and busy ASINs overflow the cap; use the order
-  items table at `quantity = 1` first.
+  items table grouped by date, ASIN and quantity first.
+- Restricting the floor to `quantity = 1` lines - a two-unit line at GBP 10 is a GBP 5 unit
+  price that a single-unit minimum of GBP 8 would hide.
+- Subtracting `discount_amount` from a price when `discount_type` is
+  `PERCENT_OFF_LIST_PRICE` - it is percent points, not money.
+- Charging the US non-peak deal fee once - it is $70 **per day**; a 7-day Best Deal is
+  $490 before the variable part.
+- Estimating a UK or DE deal's fee from the US schedule, or from a snapshot taken for a
+  later event - report "unavailable" and the verdict before fees instead.
+- Reading a non-zero settlement fee column anywhere in the window as "the fee is already
+  in ASIN profit" - fee rows are account-level and carry the promotion id in
+  `amazon_order_id`; they are never in the ASIN subtotals.
+- Repeating the full upfront or capped fee in every ASIN's calculation - it is one fee per
+  promotion.
+- Subtracting `cogs_total_value` on top of a unit cost inferred from baseline profit - COGS
+  is then counted twice and a profitable plan reads as a loss.
+- Judging baseline cleanliness from the calendar - it holds live promotions and the last
+  30 days only; the historical waves live in the performance tables.
+- Fetching Promotion Items only with `issues notNull` - healthy items have null `issues`,
+  so the overlap check and the join fallback lose every healthy multi-ASIN deal.
+- Calling a deal "paid off" with units that have no uploaded COGS in the window - profit
+  is inflated by zero cost there; mark it provisional.
 - Missing that your own cheaper SKU on the same ASIN (an FBM or a Grade and Resell offer)
   is the floor Amazon will hold you to.
 - Calling a deal "lost money" when the ASIN loses money at full price too - say that the
