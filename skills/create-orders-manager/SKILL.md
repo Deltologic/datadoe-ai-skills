@@ -246,7 +246,7 @@ The `/raw` endpoint returns a **flat array of line items**. Each element is one 
 | `amazon_order_item_id` | Line item | Amazon's order-item id — unique per line, never null. **Use it as the row key** (TanStack `getRowId`). |
 | `amazon_order_status`        | Order     | Consistent across all rows for the same order. `Pending` / `Unshipped` / `Shipped` / `Canceled`; some marketplaces prefix `Shipped*` / `Unshipped*` |
 | `fulfillment_channel` | Order     | Consistent across all rows for the same order                     |
-| `date`                | Order     | Purchase date. Marketplace orders use the marketplace local date. Off-Amazon lines use the UTC calendar day of the purchase time. Use this for display and sorting. `order_date` duplicates `date`. |
+| `date`                | Order     | Purchase date. Marketplace orders use the marketplace local date. Off-Amazon lines use the kept connection's country time zone. Use this for display and sorting. `order_date` duplicates `date`. |
 | `sales_channel`       | Order     | Amazon's supplied channel. A marketplace order uses an Amazon marketplace domain, such as Amazon.com. Any other non-empty value, including Non-Amazon, is off-Amazon Multi-Channel Fulfillment. That value does not name the external store. A blank channel is not off-Amazon. |
 | `sku`                 | Line item | Seller SKU of the line. **Not unique within an order** — the same SKU can be a separate order item more than once, so never key rows by it |
 | `line_item_number`    | Line item | Occurrence index of the same SKU within the order (`0` for the first line of each SKU; increments only when that SKU repeats). **Not** the line's position in the order — do not use it to order or key lines |
@@ -281,7 +281,7 @@ for (const item of lineItems) {
       amazon_order_status: item.amazon_order_status, // order-level, consistent
       fulfillment_channel: item.fulfillment_channel, // order-level, consistent
       sales_channel: item.sales_channel, // order-level, consistent
-      date: item.date, // marketplace local date, or the UTC day for an off-Amazon line
+      date: item.date, // local date in the kept connection's country time zone
       currency: item.item_price_currency ?? null, // null on cancelled lines; filled from a later line
       totalPrice: linePrice, // line total, NOT × quantity
       itemCount: item.quantity ?? 0,
