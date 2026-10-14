@@ -39,7 +39,7 @@ Determine your agent type before starting:
 ### 2. Orders Table
 
 - Display orders in a table with expandable nested rows for line items.
-- Parent row: `amazon_order_id`, `date`, `amazon_order_status`, `fulfillment_channel`, total item count, total price.
+- Parent row: `amazon_order_id`, `date`, `amazon_order_status`, `fulfillment_channel`, `sales_channel`, total item count, total price.
 - Child rows (expanded): `sku`, `child_asin`, `product_name`, `quantity`, `item_price_value`, `item_price_currency`, `item_status` — keyed by `amazon_order_item_id` (`sku` can repeat within an order).
 - Client-side pagination with configurable page size (10/25/50).
 
@@ -144,6 +144,7 @@ Request body:
     "date",
     "amazon_order_status",
     "fulfillment_channel",
+    "sales_channel",
     "sku",
     "line_item_number",
     "child_asin",
@@ -219,6 +220,7 @@ Example row returned in the flat array:
   "date": "2025-01-12",
   "amazon_order_status": "Shipped",
   "fulfillment_channel": "Amazon",
+  "sales_channel": "Amazon.co.uk",
   "child_asin": "ABCDEFGHIJ",
   "product_name": "xyz",
   "item_status": "Shipped",
@@ -244,14 +246,15 @@ The `/raw` endpoint returns a **flat array of line items**. Each element is one 
 | `amazon_order_item_id` | Line item | Amazon's order-item id — unique per line, never null. **Use it as the row key** (TanStack `getRowId`). |
 | `amazon_order_status`        | Order     | Consistent across all rows for the same order. `Pending` / `Unshipped` / `Shipped` / `Canceled`; some marketplaces prefix `Shipped*` / `Unshipped*` |
 | `fulfillment_channel` | Order     | Consistent across all rows for the same order                     |
-| `date`                | Order     | Purchase date in the marketplace timezone. Use this for display and sorting. `order_date` duplicates `date`. |
+| `date`                | Order     | Purchase date. Marketplace orders use the marketplace local date. Off-Amazon lines use the kept connection's country time zone. Use this for display and sorting. `order_date` duplicates `date`. |
+| `sales_channel`       | Order     | Amazon's supplied channel. A marketplace order uses an Amazon marketplace domain, such as Amazon.com. Any other non-empty value, including Non-Amazon, is off-Amazon Multi-Channel Fulfillment. That value does not name the external store. A blank channel is not off-Amazon. |
 | `sku`                 | Line item | Seller SKU of the line. **Not unique within an order** — the same SKU can be a separate order item more than once, so never key rows by it |
 | `line_item_number`    | Line item | Occurrence index of the same SKU within the order (`0` for the first line of each SKU; increments only when that SKU repeats). **Not** the line's position in the order — do not use it to order or key lines |
 | `child_asin`          | Line item | Amazon ASIN                                                       |
 | `product_name`        | Line item | Full product name                                                 |
 | `item_status`         | Line item | Can differ from `amazon_order_status`                                    |
 | `quantity`            | Line item | Units for this SKU only                                           |
-| `item_price_value`    | Line item | **Line-item total value — already includes quantity; use as-is, do NOT multiply by `quantity`.** **Null on cancelled lines** (and on orders <4h old): coalesce to `0` and render "—" with a "cancelled" badge, never `NaN` |
+| `item_price_value`    | Line item | **Line-item total value — already includes quantity; use as-is, do NOT multiply by `quantity`.** **Null on cancelled lines** (and on orders <4h old): coalesce to `0` and render "—" with a "cancelled" badge, never `NaN`. On an off-Amazon line this is the order-report amount, not verified sales. |
 | `item_price_currency` | Line item | Consistent across the priced rows of an order; **null on cancelled lines** — take it from another line of the same order, else fall back to the marketplace currency |
 
 **How to build the parent (order) row from the flat array:**
@@ -277,7 +280,8 @@ for (const item of lineItems) {
       amazon_order_id: item.amazon_order_id,
       amazon_order_status: item.amazon_order_status, // order-level, consistent
       fulfillment_channel: item.fulfillment_channel, // order-level, consistent
-      date: item.date, // purchase date in the marketplace timezone
+      sales_channel: item.sales_channel, // order-level, consistent
+      date: item.date, // local date in the kept connection's country time zone
       currency: item.item_price_currency ?? null, // null on cancelled lines; filled from a later line
       totalPrice: linePrice, // line total, NOT × quantity
       itemCount: item.quantity ?? 0,
@@ -300,8 +304,9 @@ const orders = Array.from(ordersMap.values());
 | Order Date | `date`                                | Purchase date          |
 | Status     | `amazon_order_status` (first item)           | Coloured badge         |
 | Channel    | `fulfillment_channel` (first item)    | Badge                  |
+| Sales channel | `sales_channel` (first item)       | Amazon domain, or the supplied off-Amazon value |
 | Items      | `sum(quantity)` across all line items | Number                 |
-| Total      | `sum(item_price_value ?? 0)` (already line totals; null on cancelled lines) | Formatted currency; "—" + "cancelled" badge when every line is null |
+| Total      | `sum(item_price_value ?? 0)` (already line totals; null on cancelled lines) | Formatted currency; "—" + "cancelled" badge when every line is null. For an off-Amazon order, label it as a declared amount, not sales revenue. |
 | Tags       | localStorage only                     | Tag chips              |
 
 **Child (line item) row columns to display** (row key: `amazon_order_item_id` via TanStack `getRowId` — not `sku`, not the array index):
@@ -314,6 +319,8 @@ const orders = Array.from(ordersMap.values());
 | Qty         | `quantity`                                 |
 | Price       | `item_price_value` + `item_price_currency` ("—" when null, i.e. cancelled line) |
 | Item Status | `item_status`                              |
+
+An order is off-Amazon when `sales_channel` is non-empty and, after trim and lowercasing, is not an Amazon marketplace domain: `amazon.ae`, `amazon.ca`, `amazon.co.jp`, `amazon.co.uk`, `amazon.co.za`, `amazon.com`, `amazon.com.au`, `amazon.com.be`, `amazon.com.br`, `amazon.com.mx`, `amazon.com.tr`, `amazon.de`, `amazon.eg`, `amazon.es`, `amazon.fr`, `amazon.ie`, `amazon.in`, `amazon.it`, `amazon.nl`, `amazon.pl`, `amazon.sa`, `amazon.se`, or `amazon.sg`. Keep the row and the supplied channel. A blank channel stays a marketplace order. Do not name an external store from a generic value such as Non-Amazon.
 
 **CRITICAL — API parameter formats discovered through testing:**
 
@@ -648,6 +655,7 @@ const ORDER_LINE_ITEMS_COLUMNS = [
   "date",
   "amazon_order_status",
   "fulfillment_channel",
+  "sales_channel",
   "sku",
   "line_item_number",
   "child_asin",

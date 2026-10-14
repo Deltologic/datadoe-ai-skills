@@ -168,8 +168,16 @@ exactly what to set.
     `cogs_total_value`, `cogs_present`.
   - `Order Line Items` (`amazon_order_items_with_cogs`) - the **primary own-price
     history** for the 30-day floor: `date`, `child_asin`, `sku`, `quantity`,
-    `item_price_value` (line total, before coupon discounts - at `quantity = 1` it is the
-    unit price the buyer saw), `item_status`. `requiresDatePeriod: true`. Grouped by
+    `sales_channel`, `item_price_value` (line total, before coupon discounts - at
+    `quantity = 1` it is the unit price the buyer saw on a marketplace order), `item_status`.
+    `requiresDatePeriod: true`. Use marketplace lines only. A line is off-Amazon when
+    `sales_channel` is non-empty and, after trim and lowercasing, is not an Amazon marketplace
+    domain (`amazon.ae`, `amazon.ca`, `amazon.co.jp`, `amazon.co.uk`, `amazon.co.za`,
+    `amazon.com`, `amazon.com.au`, `amazon.com.be`, `amazon.com.br`, `amazon.com.mx`,
+    `amazon.com.tr`, `amazon.de`, `amazon.eg`, `amazon.es`, `amazon.fr`, `amazon.ie`,
+    `amazon.in`, `amazon.it`, `amazon.nl`, `amazon.pl`, `amazon.sa`, `amazon.se`, `amazon.sg`).
+    A blank channel stays. An off-Amazon `item_price_value` is a declared amount, not a buyer
+    price, and a generic value such as Non-Amazon does not name a store. Grouped by
     `child_asin` it is one row per ASIN whatever the volume (2,292 single-unit lines in 30
     days on one ASIN came back as one row).
   - Subscribe & Save, when the user asks about S&S coupons: `amazon_replenishment_offers`
@@ -421,11 +429,11 @@ exactly what to set.
    list, a type and a price or % off; otherwise skip to the output):
    - **Price floor (primary):** `amazon_order_items_with_cogs`, `from`/`to` = the 30 days
      ending yesterday, filter `child_asin in (...)` (the planned ASINs, a short list),
-     `quantity > 0` and `item_status != Canceled`, `groupBy [date, child_asin, quantity]`,
-     `min(item_price_value) as min_line`, `count(amazon_order_item_id) as n_lines` -> unit
-     price per row = `min_line` / `quantity` (a two-unit line of GBP 6.98 is a GBP 3.49
-     unit price), one row per day, ASIN and quantity bucket (140 rows for two busy ASINs
-     over 30 days). Keep the date: it is what ties a price to a coupon. **Coupon
+     `quantity > 0` and `item_status != Canceled`, `groupBy [date, child_asin, quantity, sales_channel]`,
+     `min(item_price_value) as min_line`, `count(amazon_order_item_id) as n_lines`. Drop
+     off-Amazon `sales_channel` rows before the minimum. Unit price per remaining row =
+     `min_line` / `quantity` (a two-unit line of GBP 6.98 is a GBP 3.49 unit price), one row
+     per day, ASIN and quantity bucket. Keep the date: it is what ties a price to a coupon. **Coupon
      conversion:** for every row whose date falls inside a coupon on that ASIN (coverage
      map, step 6a, with the coupon's `discount_type` / `discount_amount` from
      `amazon_coupon_performance` or the calendar), the paid unit price is unit x (1 -

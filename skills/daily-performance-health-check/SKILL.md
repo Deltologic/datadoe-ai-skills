@@ -81,11 +81,19 @@ Slack with the biggest issues first. Live from DataDoe.
   the file (the URL expires after ~15 minutes) instead of pulling it into the conversation.
   Treat null numbers as 0 unless a step says otherwise. Marketplace codes are ISO (the UK is `GB`).
 - **Yesterday's sales, orders, units, COGS, tax:** `Order Line Items`
-  (`amazon_order_items_with_cogs`, free, real time) - `date` (purchase date, marketplace time),
-  `amazon_order_id`, `amazon_order_status`, `quantity`, `item_price_value` (line total, excludes
-  shipping), `item_tax_value`, `item_price_currency`, `cogs_item_value` (unit cost x quantity),
-  `cogs_present`, `child_asin`, `product_name`. Exclude `amazon_order_status = Canceled`.
-  Lines from the last ~4 hours can have no price yet - irrelevant for yesterday by morning.
+  (`amazon_order_items_with_cogs`, free, real time) - `date` (purchase date; marketplace local
+  date on a marketplace order), `amazon_order_id`, `amazon_order_status`, `sales_channel`,
+  `quantity`, `item_price_value` (line total, excludes shipping), `item_tax_value`,
+  `item_price_currency`, `cogs_item_value` (unit cost x quantity), `cogs_present`, `child_asin`,
+  `product_name`. Exclude `amazon_order_status = Canceled`. Also exclude an off-Amazon line:
+  `sales_channel` is non-empty and, after trim and lowercasing, is not an Amazon marketplace
+  domain (`amazon.ae`, `amazon.ca`, `amazon.co.jp`, `amazon.co.uk`, `amazon.co.za`,
+  `amazon.com`, `amazon.com.au`, `amazon.com.be`, `amazon.com.br`, `amazon.com.mx`,
+  `amazon.com.tr`, `amazon.de`, `amazon.eg`, `amazon.es`, `amazon.fr`, `amazon.ie`,
+  `amazon.in`, `amazon.it`, `amazon.nl`, `amazon.pl`, `amazon.sa`, `amazon.se`, `amazon.sg`).
+  A blank channel stays. Its `item_price_value` is a fulfillment or declared amount, not sales,
+  and a generic value such as Non-Amazon does not name a store. Lines from the last ~4 hours
+  can have no price yet - irrelevant for yesterday by morning.
 - **Ads:** `Ad Performance by Campaign & Date` (`amazon_ads_performance_by_campaign_by_date`) -
   `date`, `ad_campaign_type`, `ad_campaign_id`, `ad_campaign_name`, `ad_spend`, `ad_sales`;
   `Ad Performance by ASIN & Date` (`amazon_ads_performance_by_child_asin_and_date`) for the ASIN
@@ -138,14 +146,15 @@ Slack with the biggest issues first. Live from DataDoe.
 1. **Orders (yesterday + 7 days):** `exports_create` on `amazon_order_items_with_cogs`, all chosen
    account ids (up to 5 per export), `from` = yesterday - 7, `to` = yesterday, filter
    `amazon_order_status != Canceled`, `groupBy ["date", "marketplace_country_code",
-   "item_price_currency", "cogs_present"]`; aggregations: sum `item_price_value` (alias
-   `sales_sum`), sum `item_tax_value` (`tax_sum`), sum `cogs_item_value` (`cogs_sum`), sum
-   `quantity` (`units_sum`). Merge the `cogs_present` rows per day in code (keep the share of
-   sales without COGS).
+   "item_price_currency", "cogs_present", "sales_channel"]`; aggregations: sum `item_price_value`
+   (alias `sales_sum`), sum `item_tax_value` (`tax_sum`), sum `cogs_item_value` (`cogs_sum`), sum
+   `quantity` (`units_sum`). Drop off-Amazon `sales_channel` groups before any total, then merge
+   the `cogs_present` rows per day in code (keep the share of sales without COGS).
    **Order count in a separate export** - same window and filter, `groupBy ["date",
-   "marketplace_country_code", "item_price_currency"]`, countDistinct `amazon_order_id`
-   (`orders_count`). An order with one line with COGS and one without would be counted twice if
-   the count came from the COGS-split export.
+   "marketplace_country_code", "item_price_currency", "sales_channel"]`, countDistinct
+   `amazon_order_id` (`orders_count`). Drop off-Amazon groups, then sum the remaining counts per
+   day. An order with one line with COGS and one without would be counted twice if the count
+   came from the COGS-split export.
 2. **Ads (same 8 days):** `groupBy ["date", "marketplace_country_code", "ad_campaign_type",
    "ad_campaign_id", "ad_campaign_name"]`, sum `ad_spend` (`spend_sum`) and `ad_sales`
    (`ad_sales_sum`), CSV, page with `skip` if a page is full.
@@ -160,10 +169,10 @@ Slack with the biggest issues first. Live from DataDoe.
    the 7 days before. Otherwise show them as "pending (ads for {date} not loaded)" and, if the
    user wants a profit figure anyway, add a separately dated line for the newest loaded day,
    whose sales, COGS and ads all cover that day and whose comparison is the 7 days before it.
-5. **Drill-down for each CRITICAL / WATCH item:** from the same Order Line Items, yesterday vs
-   the 7-day average by `child_asin` (`groupBy ["child_asin", "product_name"]`, two exports or
-   one with `date`) -> the 3 products that explain most of the change; for an ad drop, the
-   campaigns that stopped.
+5. **Drill-down for each CRITICAL / WATCH item:** from the same marketplace Order Line Items, yesterday vs
+   the 7-day average by `child_asin` (`groupBy ["child_asin", "product_name", "sales_channel"]`, two exports or
+   one with `date`). Drop off-Amazon `sales_channel` groups before ranking -> the 3 products that
+   explain most of the change; for an ad drop, the campaigns that stopped.
 6. **Post** the message (Output format) with the connected Slack tool; if Slack isn't
    available, use the channel the user chose. Only post to the destinations the user gave.
 
@@ -233,7 +242,7 @@ routine runs (otherwise paste the full skill text into the routine):
 ```
 Every day at {10:30} {Europe/London}: run the daily-performance-health-check skill for DataDoe
 seller accounts {names + ids + marketplaces}. Yesterday vs the previous 7 days: sales, orders,
-units, COGS and tax from amazon_order_items_with_cogs (not Canceled); ads from
+units, COGS and tax from amazon_order_items_with_cogs (not Canceled, marketplace sales_channel only); ads from
 amazon_ads_performance_by_campaign_by_date, judged only on a loaded ads day. Thresholds:
 {critical -50%, watch -20%, +5pp ACoS/TACoS, -5pp margin}. Known events: {promotions / dates}.
 {Updated version: account-health line, likely causes, quiet mode with Monday all-clear.}
