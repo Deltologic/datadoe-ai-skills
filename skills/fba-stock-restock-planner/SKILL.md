@@ -76,7 +76,14 @@ Per ASIN (top 50 by last-30-day units, adjustable):
   the window or an initial load still in progress - say which and use the fallback; never
   render zeros.
   - Fallback: `Order Line Items` (`amazon_order_items_with_cogs`, free) - sum `quantity` per
-    `child_asin`, excluding `amazon_order_status = Canceled`.
+    `child_asin`, excluding `amazon_order_status = Canceled` and off-Amazon lines. Include
+    `sales_channel` in `groupBy`, then keep a group only when `sales_channel` is blank or its
+    trimmed lowercase value is an Amazon marketplace domain (`amazon.ae`, `amazon.ca`,
+    `amazon.co.jp`, `amazon.co.uk`, `amazon.co.za`, `amazon.com`, `amazon.com.au`,
+    `amazon.com.be`, `amazon.com.br`, `amazon.com.mx`, `amazon.com.tr`, `amazon.de`,
+    `amazon.eg`, `amazon.es`, `amazon.fr`, `amazon.ie`, `amazon.in`, `amazon.it`, `amazon.nl`,
+    `amazon.pl`, `amazon.sa`, `amazon.se`, `amazon.sg`). This matches Profit by SKU, which
+    omits those units. An off-Amazon amount is not marketplace sales.
   - The old video build read units from the deprecated Sales & Traffic table; use the profit
     table instead of `amazon_sales_and_traffic_with_cogs`.
 - **FBA stock:** `FBA Inventory Health` (`amazon_fba_inventory_health`) **[premium]** - a daily
