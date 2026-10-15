@@ -69,9 +69,10 @@ guardrails below.
 - Resolve targetId + live bid: the `AMAZON_ADS_TARGETS_FIND` action returns the `targetId`
   and the live `bid`. Filter with `adProductFilter.include: ["SPONSORED_PRODUCTS"]` (FIND
   requires **exactly one** ad product) plus `campaignIdFilter` / `keywordFilter` /
-  `targetIdFilter`. **FIND is an Action and needs the connection on Read and write** even
-  though it only reads - a Read-only account answers "Actions are not enabled for this
-  seller or vendor account. Set access level to Read and write". Fallback without it:
+  `targetIdFilter`. **FIND is a read Action.** It runs on a Seller or Vendor with Read only
+  or Read and write access. Do not skip it because the account is Read only. Use the
+  table fallback only when FIND is unavailable, for example when that Action type is
+  disabled for the Organization:
   `amazon_ads_profit_by_target_and_date.action_target_id` is the Ads `targetId` (for
   Sponsored Products it equals `ad_keyword_id` on keyword rows and `ad_target_id` on
   auto/product rows), with `ad_target_bid` as the bid (else `ad_keyword_bid`) and
@@ -95,11 +96,12 @@ guardrails below.
   `amazon_ads_ad_groups_raw` are **72-hour snapshots**. Never take the "current" bid from
   them before a write - read it live with `AMAZON_ADS_TARGETS_FIND` (step 3).
 - Inputs from user: target ACoS (e.g. 30%), min/max bid, max step (default +/-30%).
-- **Prerequisites:** the seller connection must be **Read and write** (Accounts page) for
-  the live apply **and for the `AMAZON_ADS_TARGETS_FIND` read**, and the
-  `AMAZON_ADS_TARGETS_UPDATE` action type must be **enabled** (Settings > Actions).
-  `dryRun` works regardless - the analysis + preview always run (with table-sourced bids
-  when FIND is unavailable).
+- **Prerequisites:** `AMAZON_ADS_TARGETS_FIND` runs on Read only and Read and write
+  accounts. The live apply needs **Read and write** (Accounts page), and the
+  `AMAZON_ADS_TARGETS_UPDATE` Action type must be **enabled** (Settings > Actions).
+  A dry run still validates the write on a Read only account and does not queue it.
+  The analysis and preview always run. Use table-sourced bids only when FIND itself
+  is unavailable.
 
 ## Step-by-step workflow (MCP-native)
 
@@ -123,8 +125,9 @@ guardrails below.
 3. **Resolve targetId + live bid:** `actions_start` `AMAZON_ADS_TARGETS_FIND` with
    `adProductFilter.include: ["SPONSORED_PRODUCTS"]` (exactly one) + `campaignIdFilter` /
    `keywordFilter` / `targetIdFilter`; poll `actions_get` -> `targetId` + live `bid` (+
-   `campaignId`, `adGroupId`) per target. If FIND is refused for access level, use
-   `action_target_id` / the table bid as in Configuration and label the bids table-sourced.
+   `campaignId`, `adGroupId`) per target. Read only access is enough for FIND. If FIND
+   is refused because the Action type is disabled, use `action_target_id` and the table
+   bid as in Configuration and label the bids table-sourced.
 4. **Compute new bid** per the framework + guardrails (>= 5 clicks, +/-30% step cap,
    0.02 floor, user min/max). Build the change list, biggest ACoS offenders first;
    max 25 targets per action - batch longer lists into several actions.
@@ -158,8 +161,9 @@ actionId: null`) even when Actions are disabled - so the preview is always safe 
 
 ## Quality self-check
 
-- Did I take `targetId` + bid from FIND, or - when FIND was refused for access level - from
-  `action_target_id` with the bids flagged as table-sourced?
+- Did I take `targetId` and the bid from FIND? Read only access is enough. Use
+  `action_target_id` with the bids flagged as table-sourced only when FIND was refused
+  because the Action type is disabled.
 - Did I filter the target-profit export to Sponsored Products and keep `ad_campaign_id` /
   `ad_group_id` in its `groupBy`, so every proposed update has a valid SP scope?
 - Did I exclude ~the last 7 days so 7-day attribution didn't trigger over-aggressive cuts?
@@ -185,13 +189,13 @@ actionId: null`) even when Actions are disabled - so the preview is always safe 
 - Taking the "current" bid from `amazon_ads_targets_raw` - a 72-hour snapshot; use the
   live bid from `AMAZON_ADS_TARGETS_FIND`.
 - Sending more than 25 targets in one `AMAZON_ADS_TARGETS_UPDATE` action.
-- Running the real update without the Action enabled / a Read-and-write connection - and
-  forgetting that `TARGETS_FIND` needs Read and write too.
+- Running the live update without the Action enabled, or without Read and write access.
+  `TARGETS_FIND` runs on Read only access. Only the live `TARGETS_UPDATE` needs Read and write.
 
 ## Notes
 
-- Write skill. Real writes need the Action enabled + read+write connection; `dryRun`
-  always works for demo/testing.
+- Write skill. The live update needs the Action enabled and Read and write access.
+  FIND runs on Read only access. A dry run still validates the write and does not send it.
 - Pairs with `ppc-wasted-spend-watchdog` (find) and `ppc-negative-keyword-applier`
   (negate the truly dead terms).
 - A DataDoe skill, built on DataDoe `amazon_ads_search_terms_by_campaign_by_date` +

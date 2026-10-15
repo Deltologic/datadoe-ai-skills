@@ -81,8 +81,8 @@ the top spenders.
   state** - a negative inside a PAUSED or ARCHIVED campaign or ad group validates and does
   nothing; confirm state with `AMAZON_ADS_CAMPAIGNS_FIND` / `AMAZON_ADS_AD_GROUPS_FIND`
   (`stateFilter.include: ["ENABLED"]`) before the dryRun. The `*_raw` Ads tables are
-  72-hour snapshots and are only the fallback when FIND is refused (FIND needs the
-  connection on Read and write).
+  72-hour snapshots and are only the fallback when FIND is refused because that Action
+  type is disabled. FIND runs on Read only and Read and write accounts.
 - Write action: `AMAZON_ADS_TARGETS_ADD` (negative keyword), gated behind a `dryRun`
   step. A negative keyword is `negative: true` + `targetType: "KEYWORD"` +
   `targetDetails: { keywordTarget: { keyword, matchType } }`, scoped to a `campaignId` +
@@ -102,9 +102,12 @@ the top spenders.
   output only. Do NOT put marketplace in the ADD payload - `AMAZON_ADS_TARGETS_ADD` on
   Sponsored Products rejects `marketplaceScope` / `marketplaces`; the `campaignId` /
   `adGroupId` already scope the negative to the right marketplace.
-- **Prerequisites for a live apply:** the seller connection must be **Read and write**
-  (Accounts page), and the `AMAZON_ADS_TARGETS_ADD` action type must be **enabled**
-  (Settings > Actions). `dryRun` works regardless - find + preview always run.
+- **Prerequisites for a live apply:** the Seller or Vendor must be **Read and write**
+  (Accounts page), and the `AMAZON_ADS_TARGETS_ADD` Action type must be **enabled**
+  (Settings > Actions). `AMAZON_ADS_CAMPAIGNS_FIND`, `AMAZON_ADS_AD_GROUPS_FIND`, and
+  `AMAZON_ADS_TARGETS_FIND` run on Read only and Read and write accounts. A dry run
+  still validates the write on a Read only account and does not queue it. The find
+  and preview always run.
 
 ## Step-by-step workflow (MCP-native)
 
@@ -193,10 +196,11 @@ the top spenders.
    candidate whose campaign or ad group is missing from the collected ids is paused or
    archived - drop it and list it under "Skipped: campaign / ad group paused". Observed:
    a live FIND returned `deliveryReasons: ["AD_GROUP_PAUSED"]` for an ad group holding a
-   dead term - a negative there would validate and do nothing. If FIND is refused
-   ("Actions are not enabled ... Set access level to Read and write"), fall back to
-   `ad_campaign_status` from the export and `amazon_ads_ad_groups_raw.ad_group_state`
-   (72-hour snapshot) and say the check is snapshot-based. Optional: when `ad_keyword` is
+   dead term - a negative there would validate and do nothing. Read only access is
+   enough for these FIND Actions. If FIND is refused because the Action type is
+   disabled, fall back to `ad_campaign_status` from the export and
+   `amazon_ads_ad_groups_raw.ad_group_state` (a 72-hour snapshot) and say the check
+   uses the snapshot. Do not ask for Read and write only to run FIND. Optional: when `ad_keyword` is
    empty, `AMAZON_ADS_TARGETS_FIND` with `negativeFilter.include: [false]` and
    `keywordFilter: { include: [<term>], queryTermMatchType: "EXACT_MATCH" }` on the ad
    group confirms whether a positive keyword with that text exists.
@@ -279,9 +283,9 @@ null`. On "apply", the negative is added and future spend on that term stops.
 - Did I split the batch so no action carries more than 25 targets?
 - Did I exclude terms that are the ad group's own bid keyword and route them to the bid
   optimizer instead of negating them?
-- Did I confirm campaign and ad-group state live (`CAMPAIGNS_FIND` / `AD_GROUPS_FIND`,
-  ENABLED only) before the dryRun - following `nextToken` through every page before
-  calling a missing id paused - and skip paused ones?
+- Did I confirm campaign and ad-group state live (`CAMPAIGNS_FIND` and `AD_GROUPS_FIND`,
+  ENABLED only) before the dry run? Read only access is enough. Follow `nextToken`
+  through every page before calling a missing id paused, and skip paused ones.
 - Did I run `dryRun`, confirm `VALIDATED` / `actionId: null`, and show it before any real write?
 - Did I get explicit approval before `dryRun: false`?
 - Is the marketplace / currency right for the output display (it is NOT passed in the
