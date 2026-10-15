@@ -383,6 +383,7 @@ Common reasons for gaps:
 
 - **Date shifting**: orders placed on Jan 31 may appear in the Feb settlement; Feb 28 orders may settle in March.
 - **Off-Amazon Multi-Channel Fulfillment lines**: a non-empty `sales_channel` that is not an Amazon marketplace domain, such as Non-Amazon. Do not read that value as a store name. Leave their `item_price_value` out of order revenue even when it is non-zero. Settlement rows can still show fulfillment fees for the same order.
+- **MCF fulfillment coverage**: `amazon_mcf_fulfillment_coverage` lists confirmed shipped Multi-Channel Fulfillment units from Amazon fulfillment notifications, and only after that table is enabled. It is not profit. External store sales, uploaded product cost, Amazon fees, shipping cost, storage, inbound, returns, and refunds are unavailable or omitted. Do not add it to marketplace profit, and do not treat a missing fee as zero. Fulfillment fees may already sit in settlement and profit tables.
 - **B2B deferred orders**: business orders may be deferred for 30 days before settlement.
 - **Canceled orders**: appear in orders (`amazon_order_status` = `Canceled`) but not in settlements.
 - **Refunds**: separate `REFUND` settlement entries posted on their own `date` (typically 1–5 weeks after the order), but they carry `amazon_order_id` and `order_date`, so they can be attributed to the original order and order month.
