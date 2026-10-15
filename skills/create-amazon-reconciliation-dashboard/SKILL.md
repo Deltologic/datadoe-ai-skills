@@ -291,7 +291,7 @@ Generate a **single, self-contained HTML file** with the interactive dashboard:
 | Field                  | Role        | Notes                                                                                  |
 | ---------------------- | ----------- | -------------------------------------------------------------------------------------- |
 | `amazon_order_id`      | Key         | Primary grouping key — unique per order                                                |
-| `date`                 | Order       | Purchase date. Marketplace orders use the marketplace local date. Off-Amazon lines use the UTC calendar day of the purchase time. Prefer this over `order_date` (a duplicate). |
+| `date`                 | Order       | Purchase date. Marketplace orders use the marketplace local date. Off-Amazon lines use the calendar day in the kept connection's country time zone. Prefer this over `order_date` (a duplicate). |
 | `amazon_order_status`  | Order       | `Pending` / `Unshipped` / `Shipped` / `Canceled`; some marketplaces prefix `Shipped*` / `Unshipped*`, so match those with beginsWith/contains, not `=` |
 | `fulfillment_channel`  | Order       | `Amazon` / `Merchant`                                                                  |
 | `sales_channel`        | Order       | Amazon's supplied channel. A marketplace order uses an Amazon marketplace domain, such as Amazon.com. Any other non-empty value, including Non-Amazon, is an off-Amazon Multi-Channel Fulfillment line. That value does not name the external store. A blank channel is not off-Amazon. |
