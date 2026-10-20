@@ -20,9 +20,10 @@ One export on `amazon_profit_by_date` (see SKILL.md step 1 for the request) over
 ~50 days. That is the lag plus 35 days, so it also covers the window 4 weeks back, which a
 30-day pull misses. Rows are per date **and currency**.
 
-- Use one currency: the marketplace currency (table below). If it is missing, use the currency
-  with the most sales. Ignore rows whose `currency` is empty (they carry no sales). If a seller
-  has sales in several currencies, say so and keep one currency per card.
+- Use one currency: the marketplace currency (table below). If the calibration has no rows in
+  it, use the currency with the most sales and label the card with that currency, not the
+  marketplace's. Ignore rows whose `currency` is empty (they carry no sales). If a seller has
+  sales in several currencies, say so and keep one currency per card.
 - Medians are taken over the days that have a row in that currency.
 
 ## Sales-present day
@@ -71,6 +72,12 @@ not move the anchor; it lowers that window's effective days instead.
 
 All three must sit inside the calibration span; if one doesn't, widen the calibration pull.
 
+**Leave incomplete days out of the window exports.** A window's export covers every date from
+`from` to `to`, so a rejected day would add its partial sales while the comparison divides by
+complete days only (six complete £100 days plus a rejected £50 day would read £650 ÷ 6 × 7 =
+£758, a fake +8%). When a window has missing dates, add the filter `date notIn <those dates,
+comma-separated>` to its export; `calibrate` returns it as the window's `exportFilter`.
+
 ## Effective days and provisional windows
 
 - A window's **effective days** = its sales-present days (out of 7). Never assume all 7 are there.
@@ -86,7 +93,9 @@ All three must sit inside the calibration span; if one doesn't, widen the calibr
 - **Truncation**: if a window export returns as many rows as its `limit`, the catalog is larger
   than the cap. Say so and don't treat the totals as complete.
 - **Reconciliation**: a window's export total should match the calibration's `sales` summed over
-  the same dates and currency. A gap above 2% means an export was truncated or filtered; report it.
+  the window's complete days, in the card currency. If it matches all 7 days instead, the export
+  missed the date filter: rerun it. Any other gap above 2% means an export was truncated or
+  filtered; report it.
 
 ## Change direction
 

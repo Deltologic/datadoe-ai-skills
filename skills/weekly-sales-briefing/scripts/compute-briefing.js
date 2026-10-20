@@ -216,12 +216,9 @@ function truncateName(name) {
 
 // ---------- calibration ----------
 
-function resolveCurrency(marketplace, currencyCodes) {
-  const mapped = marketplace ? CURRENCY_BY_MARKETPLACE[marketplace.toUpperCase()] : undefined;
-  if (mapped) return { code: mapped[0], symbol: mapped[1] };
-  const code = currencyCodes[0];
+function currencyFor(code) {
   const known = Object.values(CURRENCY_BY_MARKETPLACE).find(([candidate]) => candidate === code);
-  return { code: code ?? 'UNKNOWN', symbol: known ? known[1] : `${code ?? ''} ` };
+  return { code, symbol: known ? known[1] : `${code} ` };
 }
 
 function calibrate(file, marketplace) {
@@ -245,8 +242,17 @@ function calibrate(file, marketplace) {
   }
   if (salesByCurrency.size === 0) fail(`${file}: no calibration rows with a currency`);
   const codesBySales = [...salesByCurrency.entries()].sort((a, b) => b[1] - a[1]).map(([code]) => code);
-  const currency = resolveCurrency(marketplace, codesBySales);
-  const rowCurrency = salesByCurrency.has(currency.code) ? currency.code : codesBySales[0];
+  // The card uses the marketplace currency when the data has it, else the top-selling one,
+  // and is always labelled with the currency it actually sums.
+  const expected = marketplace ? CURRENCY_BY_MARKETPLACE[marketplace.toUpperCase()] : undefined;
+  const rowCurrency = expected && salesByCurrency.has(expected[0]) ? expected[0] : codesBySales[0];
+  let currency;
+  if (rowCurrency !== 'ALL') currency = currencyFor(rowCurrency);
+  else if (expected) currency = { code: expected[0], symbol: expected[1] };
+  else fail(`${file}: no currency column and no known --marketplace to derive the currency from`);
+  if (expected && rowCurrency !== 'ALL' && rowCurrency !== expected[0]) {
+    warnings.push(`Marketplace ${marketplace.toUpperCase()} normally sells in ${expected[0]}, but the calibration has no ${expected[0]} rows; the card uses ${rowCurrency}.`);
+  }
   if (salesByCurrency.size > 1) {
     warnings.push(`Calibration has several currencies (${codesBySales.join(', ')}); the briefing uses ${rowCurrency} only.`);
   }
@@ -308,13 +314,19 @@ function calibrate(file, marketplace) {
     const windowDays = listDays(fromDay, endDay);
     const presentDays = windowDays.filter((day) => present.has(day)).length;
     const outsideCalibration = windowDays.filter((day) => day < spanFrom || day > spanTo);
+    const missingDates = windowDays.filter((day) => !present.has(day));
     return {
       from: fromDay,
       to: endDay,
       presentDays,
-      missingDates: windowDays.filter((day) => !present.has(day)),
+      missingDates,
       outsideCalibration,
       provisional: fallback || presentDays < WINDOW_DAYS,
+      // Add to the window export so incomplete days don't inflate the per-day comparison.
+      exportFilter:
+        missingDates.length === 0
+          ? null
+          : { combinator: 'and', rules: [{ field: 'date', operator: 'notIn', value: missingDates.join(','), not: false }] },
     };
   };
   const windows = {
@@ -441,17 +453,25 @@ function report(flags) {
   const windows = {};
   for (const [name, window] of Object.entries(cal.windows)) {
     const exported = data[name];
-    const calibrationSales = listDays(window.from, window.to).reduce(
-      (sum, day) => sum + (cal.calibrationSalesByDay[day] ?? 0),
-      0,
-    );
+    const sumCalibration = (days) => days.reduce((sum, day) => sum + (cal.calibrationSalesByDay[day] ?? 0), 0);
+    const windowDays = listDays(window.from, window.to);
+    // The window export should cover the complete days only (see exportFilter).
+    const calibrationSales = sumCalibration(windowDays.filter((day) => !window.missingDates.includes(day)));
+    const allDaysSales = sumCalibration(windowDays);
     const gapPct = calibrationSales === 0 ? null : ((exported.revenue - calibrationSales) / calibrationSales) * 100;
     const reconciled = gapPct === null ? exported.revenue === 0 : Math.abs(gapPct) <= RECONCILIATION_TOLERANCE_PCT;
+    const includesIncompleteDays =
+      !reconciled &&
+      allDaysSales !== calibrationSales &&
+      Math.abs(exported.revenue - allDaysSales) <= (RECONCILIATION_TOLERANCE_PCT / 100) * allDaysSales;
     if (exported.truncated) {
       warnings.push(`${name} export returned ${exported.rowCount} rows (the limit), so its totals are incomplete.`);
       cardNotes.push(`${windowLabels[name]}'s export hit the ${exported.rowCount}-row limit, so its totals are incomplete.`);
     }
-    if (!reconciled) {
+    if (includesIncompleteDays) {
+      warnings.push(`${name} export includes the incomplete day(s) ${window.missingDates.join(', ')}; rerun it with that window's exportFilter from calibrate.`);
+      cardNotes.push(`${windowLabels[name]}'s SKU total includes incomplete days, so its comparison is overstated.`);
+    } else if (!reconciled) {
       const gapText = gapPct === null ? 'n/a' : `${round(gapPct, 1)}%`;
       warnings.push(`${name} export total differs from the calibration by ${gapText}; an export may be truncated or filtered.`);
       cardNotes.push(`${windowLabels[name]}'s SKU total differs from the account total by ${gapText}.`);

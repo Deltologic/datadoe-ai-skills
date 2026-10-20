@@ -25,7 +25,8 @@
       "presentDays": 7,
       "missingDates": [],
       "outsideCalibration": [],
-      "provisional": false
+      "provisional": false,
+      "exportFilter": null
     },
     "lastWeek": {
       "from": "2026-02-20",
@@ -33,7 +34,8 @@
       "presentDays": 7,
       "missingDates": [],
       "outsideCalibration": [],
-      "provisional": false
+      "provisional": false,
+      "exportFilter": null
     },
     "lastMonth": {
       "from": "2026-01-30",
@@ -41,7 +43,8 @@
       "presentDays": 7,
       "missingDates": [],
       "outsideCalibration": [],
-      "provisional": false
+      "provisional": false,
+      "exportFilter": null
     }
   },
   "notComplete": [

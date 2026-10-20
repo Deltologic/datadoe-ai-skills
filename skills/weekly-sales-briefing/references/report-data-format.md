@@ -69,7 +69,7 @@ the card currency, rounded to 2 decimals. Percentages are rounded to 1 decimal.
 | `drops.provisional` | `true` when this week or last week is provisional |
 | `insights` | 1–2 one-sentence observations you write from the data (see SKILL.md step 6); required |
 | `footer.text` | `Data via DataDoe · Generated <today> · sales complete through <anchor day>`, dates as `20 Oct 2026` |
-| `footer.notes` | one line per provisional window: `This week reflects 6 of 7 days.` (`Last week …`, `Last month …`); then `<Window>'s export hit the <rows>-row limit, so its totals are incomplete.` for a truncated export (`<rows>` = the export's row count), `<Window>'s SKU total differs from the account total by <gap>%.` for a reconciliation gap above 2% (`<gap>` signed, 1 decimal, e.g. `-3.4%`), and `Only <code> sales are shown; the account also sells in <codes>.` when the calibration has several currencies. Add the traffic line from SKILL.md if the card shows any traffic or rate figure |
+| `footer.notes` | one line per provisional window: `This week reflects 6 of 7 days.` (`Last week …`, `Last month …`); then `<Window>'s export hit the <rows>-row limit, so its totals are incomplete.` for a truncated export (`<rows>` = the export's row count), `<Window>'s SKU total includes incomplete days, so its comparison is overstated.` when the export missed the date filter (rerun it rather than publish), `<Window>'s SKU total differs from the account total by <gap>%.` for any other reconciliation gap above 2% (`<gap>` signed, 1 decimal, e.g. `-3.4%`), and `Only <code> sales are shown; the account also sells in <codes>.` when the calibration has several currencies. Add the traffic line from SKILL.md if the card shows any traffic or rate figure |
 
 ## Extra fields from the script
 
@@ -80,9 +80,11 @@ insights and mention anything material:
   and `reconciliation` (export total vs calibration, `gapPct`, `ok`);
 - `insightFacts`: the top 3 risers (same basis as the drops), the top 5's share of this week's
   revenue, and how many ASINs sold this week;
-- `warnings`: truncation, reconciliation gaps, several currencies, windows outside the
+- `warnings`: truncation, reconciliation gaps, an export that missed the date filter (rerun
+  it), a currency other than the marketplace's, several currencies, windows outside the
   calibration span (widen the calibration pull and rerun), or a fallback anchor. The ones that
   affect the numbers are already in `footer.notes`.
 
-`compute-briefing.js calibrate` returns the anchor (`lastCompleteDay`), the three windows to
-export, the days that failed the completeness test with the reason, and the traffic-complete day.
+`compute-briefing.js calibrate` returns the card currency, the anchor (`lastCompleteDay`), the
+three windows to export with each one's `exportFilter` (`null` when all 7 days are complete),
+the days that failed the completeness test with the reason, and the traffic-complete day.

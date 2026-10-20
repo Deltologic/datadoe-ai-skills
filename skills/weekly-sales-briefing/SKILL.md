@@ -105,10 +105,10 @@ Then find the last complete day and the three windows:
 node scripts/compute-briefing.js calibrate --calibration calibration.json --marketplace UK
 ```
 
-Without code, apply `references/data-completeness.md`. The result is the anchor
-(`lastCompleteDay`), the `from` / `to` of each window, its effective days and the days that
-failed the completeness test with the reason. Check that all three windows fall inside the
-calibration span.
+Without code, apply `references/data-completeness.md`. The result is the card currency, the
+anchor (`lastCompleteDay`), the `from` / `to` of each window, its effective days, its
+`exportFilter` (the incomplete days to leave out) and the days that failed the completeness
+test with the reason. Check that all three windows fall inside the calibration span.
 
 ### 2. Create three exports
 
@@ -133,8 +133,10 @@ Call `exports_create` three times (one per window, concurrently if possible) wit
   across days in code - never `sum()` them in the grouped export.
 - `outputType`: `"CSV"`, `limit`: `5000` (both are required by `exports_create`). The rows
   include ASINs with 0 sales in the window; that is expected.
-- if the calibration shows sales in more than one currency, add the filter
-  `currency = <card currency>`, so the card keeps one currency
+- `filters`: the window's `exportFilter` from step 1 when it has incomplete days
+  (`date notIn <dates>`), so their partial sales don't inflate the per-day comparison; and,
+  if the calibration shows sales in more than one currency, `currency = <card currency>`
+  (the currency from step 1), so the card keeps one currency
 - `from` / `to`: the window's dates from step 1 - mandatory on this table
   (`requiresDatePeriod: true`); these are the only accepted date keys, the legacy camelCase
   names are rejected and a `date` filter does not replace them

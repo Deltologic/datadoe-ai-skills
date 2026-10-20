@@ -21,6 +21,17 @@
       ],
       "outsideCalibration": [],
       "provisional": true,
+      "exportFilter": {
+        "combinator": "and",
+        "rules": [
+          {
+            "field": "date",
+            "operator": "notIn",
+            "value": "2026-03-12",
+            "not": false
+          }
+        ]
+      },
       "revenue": 2100,
       "units": 210,
       "orders": 191,
@@ -40,6 +51,7 @@
       "missingDates": [],
       "outsideCalibration": [],
       "provisional": false,
+      "exportFilter": null,
       "revenue": 2800,
       "units": 280,
       "orders": 253,
@@ -59,6 +71,7 @@
       "missingDates": [],
       "outsideCalibration": [],
       "provisional": false,
+      "exportFilter": null,
       "revenue": 2100,
       "units": 210,
       "orders": 191,

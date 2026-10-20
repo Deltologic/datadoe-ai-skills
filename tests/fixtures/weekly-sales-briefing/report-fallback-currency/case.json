@@ -1,0 +1,11 @@
+{
+  "command": [
+    "node", "scripts/compute-briefing.js", "report",
+    "--calibration", "${case}/calibration.json",
+    "--this-week", "${case}/this-week.csv",
+    "--last-week", "${case}/last-week.csv",
+    "--last-month", "${case}/last-month.csv",
+    "--seller", "Test Seller", "--marketplace", "UK", "--generated", "2026-03-18"
+  ],
+  "stdout": "expected-stdout.json"
+}
