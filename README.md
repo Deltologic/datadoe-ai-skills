@@ -106,7 +106,7 @@ Every script has at least one fixture case in `tests/fixtures/<skill-name>/<case
 }
 ```
 
-The command runs from the skill folder. `${case}` is the case folder, `${out}` a temporary output folder and `${skill}` the skill folder. `stdout` and `files` name expected outputs in the case folder; `.json` files are compared as JSON, everything else as text. Set at least one of them.
+The command runs from the skill folder. `${case}` is the case folder, `${out}` a temporary output folder and `${skill}` the skill folder. A helper script counts as covered when a script that a fixture runs loads it, directly or through other helpers. `stdout` and `files` name expected outputs in the case folder; `.json` files are compared as JSON, everything else as text. Set at least one of them.
 
 `yarn test` also checks that every path `SKILL.md` names exists, that no bundled file is unused, and that assets are plain text within the size limit.
 
