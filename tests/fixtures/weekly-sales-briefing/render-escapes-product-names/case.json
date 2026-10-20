@@ -1,0 +1,8 @@
+{
+  "command": [
+    "node", "scripts/render-briefing.js", "--data", "${case}/report-data.json", "--out", "${out}/briefing.html",
+    "--insight", "Revenue fell 12.5% week over week; A1 lost £350.",
+    "--insight", "Sales <b>below</b> last week on 1 of 3 ASINs."
+  ],
+  "files": { "briefing.html": "expected-briefing.html" }
+}

@@ -1,0 +1,6 @@
+marketplace_id,marketplace_country_code,seller_or_vendor_id,child_asin,product_name,sales,units,orders,days
+A1F83G8C2ARO7P,DE,test-seller,A1,"Alpha Insoles, Size 42 ""Comfort""",1050,105,95,7
+A1F83G8C2ARO7P,DE,test-seller,A2,,280,28,25,7
+A1F83G8C2ARO7P,DE,test-seller,A3,"Gamma Spray – Waterproofing for Shoes and Boots, 300 ml",1400,140,127,7
+A1F83G8C2ARO7P,DE,test-seller,A4,Delta Brush,70,7,6,7
+A1F83G8C2ARO7P,DE,test-seller,A3,,0,0,0,1
