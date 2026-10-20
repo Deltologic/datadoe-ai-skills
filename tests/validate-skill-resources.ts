@@ -212,24 +212,38 @@ function expectSameContent(actual: string, expectedPath: string): void {
   }
 }
 
-/** Scripts a fixture command runs, plus helper scripts other scripts load by file name. */
+/**
+ * Scripts a fixture command runs, plus the helpers those scripts load by path or file name,
+ * followed transitively. A script that only unexercised scripts mention does not count.
+ */
 function findExercisedScripts(skill: string, fixtures: readonly FixtureCase[]): Set<string> {
-  const exercised = new Set<string>();
-  for (const fixture of fixtures.filter((candidate) => candidate.skill === skill)) {
-    for (const arg of readFixtureSpec(fixture).command) {
-      for (const referenced of findReferencedPaths(arg)) {
-        if (referenced.startsWith('scripts/')) exercised.add(referenced);
-      }
-    }
-  }
   const skillDir = path.join(skillsDir, skill);
   const scripts = listResourceFiles(skill).filter((resource) => resource.startsWith('scripts/'));
-  for (const script of scripts) {
-    const baseName = path.posix.basename(script);
-    const loadedByOther = scripts.some(
-      (other) => other !== script && fs.readFileSync(path.join(skillDir, other), 'utf8').includes(baseName),
-    );
-    if (loadedByOther) exercised.add(script);
+  const toBundledScript = (arg: string): string | undefined => {
+    const relative = path.relative(skillDir, path.resolve(skillDir, arg)).split(path.sep).join('/');
+    return scripts.find((script) => script === relative);
+  };
+
+  const pending: string[] = [];
+  for (const fixture of fixtures.filter((candidate) => candidate.skill === skill)) {
+    const places = { skill: skillDir, case: fixture.dir, out: path.join(fixture.dir, '.out') };
+    for (const arg of readFixtureSpec(fixture).command) {
+      const script = toBundledScript(expandPlaceholders(arg, places));
+      if (script) pending.push(script);
+    }
+  }
+
+  const exercised = new Set<string>();
+  while (pending.length > 0) {
+    const script = pending.pop()!;
+    if (exercised.has(script)) continue;
+    exercised.add(script);
+    const text = fs.readFileSync(path.join(skillDir, script), 'utf8');
+    for (const other of scripts) {
+      if (!exercised.has(other) && (text.includes(other) || text.includes(path.posix.basename(other)))) {
+        pending.push(other);
+      }
+    }
   }
   return exercised;
 }
