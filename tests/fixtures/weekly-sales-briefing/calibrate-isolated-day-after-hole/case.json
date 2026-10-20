@@ -1,0 +1,4 @@
+{
+  "command": ["node", "scripts/compute-briefing.js", "calibrate", "--calibration", "${case}/calibration.json", "--marketplace", "UK"],
+  "stdout": "expected-stdout.json"
+}

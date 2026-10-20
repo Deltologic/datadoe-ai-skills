@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Weekly Sales Briefing</title>
+<style>
+  :root {
+    --bg: #0f1218;
+    --card: #171b24;
+    --card-2: #1d2230;
+    --line: #2a3142;
+    --text: #e8ebf2;
+    --muted: #9aa3b5;
+    --up: #34d399;
+    --down: #f87171;
+    --flat: #cbd5e1;
+    --accent: #60a5fa;
+    --warn: #fbbf24;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 24px 16px 32px; }
+  header h1 { margin: 0; font-size: 22px; font-weight: 650; letter-spacing: -0.01em; }
+  header p { margin: 4px 0 0; color: var(--muted); }
+  .badge {
+    display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px;
+    font-size: 11px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase;
+    background: rgba(251, 191, 36, 0.14); color: var(--warn); vertical-align: middle;
+  }
+  section {
+    margin-top: 18px; background: var(--card); border: 1px solid var(--line);
+    border-radius: 12px; padding: 18px;
+  }
+  section h2 { margin: 0 0 12px; font-size: 15px; font-weight: 600; }
+  .kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .tile { background: var(--card-2); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  .tile .label { color: var(--muted); font-size: 12px; }
+  .tile .value { margin-top: 4px; font-size: 26px; font-weight: 700; letter-spacing: -0.02em; }
+  .tile .sub { margin-top: 2px; color: var(--muted); font-size: 12px; }
+  .up { color: var(--up); }
+  .down { color: var(--down); }
+  .flat { color: var(--flat); }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 9px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+  th { color: var(--muted); font-size: 12px; font-weight: 500; }
+  td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  tr:last-child td { border-bottom: 0; }
+  .asin { color: var(--muted); font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .note { color: var(--muted); margin: 0; }
+  .insights { background: rgba(96, 165, 250, 0.08); border-color: rgba(96, 165, 250, 0.35); }
+  .insights ul { margin: 0; padding-left: 18px; }
+  .insights li + li { margin-top: 6px; }
+  footer { margin-top: 18px; color: var(--muted); font-size: 12px; }
+  footer p { margin: 2px 0; }
+  @media (max-width: 640px) {
+    .kpis { grid-template-columns: 1fr; }
+    .hide-sm { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap" id="app"></div>
+<!-- Report data: see references/report-data-format.md. scripts/render-briefing.js fills it in. -->
+<script type="application/json" id="briefing-data">__BRIEFING_DATA__</script>
+<script>
+(function () {
+  var data = JSON.parse(document.getElementById('briefing-data').textContent);
+  var app = document.getElementById('app');
+  var symbol = data.currency.symbol;
+
+  function el(tag, className, text) {
+    var node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined && text !== null) node.textContent = text;
+    return node;
+  }
+  function money(value) {
+    var sign = value < 0 ? '-' : '';
+    return sign + symbol + Math.abs(value).toLocaleString('en-US', { maximumFractionDigits: 0 });
+  }
+  function signedMoney(value) {
+    return (value > 0 ? '+' : '') + money(value);
+  }
+  function pct(value) {
+    if (value === null || value === undefined) return 'n/a';
+    return (value > 0 ? '+' : '') + value.toFixed(1) + '%';
+  }
+  function badge(parent, text) {
+    parent.appendChild(el('span', 'badge', text));
+  }
+
+  var header = el('header');
+  header.appendChild(el('h1', null, data.header.title));
+  header.appendChild(el('p', null, data.header.subtitle));
+  app.appendChild(header);
+
+  // 1. KPI block
+  var kpiSection = el('section');
+  kpiSection.appendChild(el('h2', null, 'This week'));
+  var grid = el('div', 'kpis');
+  var thisWeek = el('div', 'tile');
+  thisWeek.appendChild(el('div', 'label', 'This Week Revenue'));
+  var thisValue = el('div', 'value', money(data.kpis.thisWeek.value));
+  thisWeek.appendChild(thisValue);
+  var thisSub = el('div', 'sub', data.kpis.thisWeek.presentDays + '/7 days present');
+  if (data.kpis.thisWeek.provisional) badge(thisSub, 'provisional');
+  thisWeek.appendChild(thisSub);
+  grid.appendChild(thisWeek);
+  [['vsLastWeek', 'vs Last Week'], ['vsLastMonth', 'vs Last Month (same week)']].forEach(function (pair) {
+    var kpi = data.kpis[pair[0]];
+    var tile = el('div', 'tile');
+    tile.appendChild(el('div', 'label', pair[1]));
+    if (!kpi.comparable) {
+      tile.appendChild(el('div', 'value flat', 'n/a'));
+      tile.appendChild(el('div', 'sub', 'No complete days to compare'));
+    } else {
+      tile.appendChild(el('div', 'value ' + kpi.direction, pct(kpi.changePct)));
+      var sub = el('div', 'sub', signedMoney(kpi.change) + ' vs ' + money(kpi.previous));
+      if (kpi.basis === 'per-present-day') sub.textContent += ' · per-day basis';
+      if (kpi.provisional) badge(sub, 'provisional');
+      tile.appendChild(sub);
+    }
+    grid.appendChild(tile);
+  });
+  kpiSection.appendChild(grid);
+  app.appendChild(kpiSection);
+
+  // 2. Top 5 SKUs
+  var topSection = el('section');
+  topSection.appendChild(el('h2', null, 'Top 5 SKUs by Revenue'));
+  if (data.topSkus.length === 0) {
+    topSection.appendChild(el('p', 'note', 'No sales this week.'));
+  } else {
+    var topTable = el('table');
+    var topHead = el('tr');
+    [['#', ''], ['Product', ''], ['Revenue', 'num'], ['Units', 'num']].forEach(function (cell) {
+      topHead.appendChild(el('th', cell[1], cell[0]));
+    });
+    topTable.appendChild(topHead);
+    data.topSkus.forEach(function (sku) {
+      var row = el('tr');
+      row.appendChild(el('td', null, String(sku.rank)));
+      var product = el('td');
+      product.appendChild(el('div', null, sku.name));
+      product.appendChild(el('div', 'asin', sku.asin));
+      row.appendChild(product);
+      row.appendChild(el('td', 'num', money(sku.revenue)));
+      row.appendChild(el('td', 'num', sku.units.toLocaleString('en-US')));
+      topTable.appendChild(row);
+    });
+    topSection.appendChild(topTable);
+  }
+  app.appendChild(topSection);
+
+  // 3. Biggest drops
+  var dropSection = el('section');
+  var dropTitle = el('h2', null, 'Biggest Drops vs Last Week');
+  if (data.drops.provisional) badge(dropTitle, 'provisional');
+  dropSection.appendChild(dropTitle);
+  if (data.drops.provisional) {
+    dropSection.appendChild(el('p', 'note', 'A window is missing days, so drops are ranked on per-day revenue scaled to 7 days.'));
+  }
+  if (data.drops.items.length === 0) {
+    dropSection.appendChild(el('p', 'note', 'No ASIN sold less than last week.'));
+  } else {
+    var dropTable = el('table');
+    var dropHead = el('tr');
+    [['Product', ''], ['This week', 'num hide-sm'], ['Last week', 'num hide-sm'], ['Δ', 'num'], ['Δ%', 'num']].forEach(function (cell) {
+      dropHead.appendChild(el('th', cell[1], cell[0]));
+    });
+    dropTable.appendChild(dropHead);
+    data.drops.items.forEach(function (drop) {
+      var row = el('tr');
+      var product = el('td');
+      product.appendChild(el('div', null, drop.name));
+      product.appendChild(el('div', 'asin', drop.asin));
+      row.appendChild(product);
+      row.appendChild(el('td', 'num hide-sm', money(drop.thisWeek)));
+      row.appendChild(el('td', 'num hide-sm', money(drop.lastWeek)));
+      row.appendChild(el('td', 'num down', signedMoney(drop.delta)));
+      row.appendChild(el('td', 'num down', pct(drop.deltaPct)));
+      dropTable.appendChild(row);
+    });
+    dropSection.appendChild(dropTable);
+  }
+  app.appendChild(dropSection);
+
+  // 4. Insights
+  var insightSection = el('section', 'insights');
+  insightSection.appendChild(el('h2', null, 'Insights'));
+  var list = el('ul');
+  data.insights.forEach(function (insight) { list.appendChild(el('li', null, insight)); });
+  insightSection.appendChild(list);
+  app.appendChild(insightSection);
+
+  var footer = el('footer');
+  footer.appendChild(el('p', null, data.footer.text));
+  data.footer.notes.forEach(function (note) { footer.appendChild(el('p', null, note)); });
+  app.appendChild(footer);
+})();
+</script>
+</body>
+</html>

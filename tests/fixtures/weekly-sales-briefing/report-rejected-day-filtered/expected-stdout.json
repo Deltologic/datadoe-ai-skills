@@ -1,0 +1,172 @@
+{
+  "header": {
+    "title": "Test Seller — Weekly Sales Briefing",
+    "seller": "Test Seller",
+    "marketplace": "UK",
+    "subtitle": "9–15 Mar 2026 · this week 6/7 days present, last week 7/7 — provisional"
+  },
+  "currency": {
+    "code": "GBP",
+    "symbol": "£"
+  },
+  "lastCompleteDay": "2026-03-15",
+  "trafficCompleteThrough": "2026-03-13",
+  "windows": {
+    "thisWeek": {
+      "from": "2026-03-09",
+      "to": "2026-03-15",
+      "presentDays": 6,
+      "missingDates": [
+        "2026-03-12"
+      ],
+      "outsideCalibration": [],
+      "provisional": true,
+      "exportFilter": {
+        "combinator": "and",
+        "rules": [
+          {
+            "field": "date",
+            "operator": "notIn",
+            "value": "2026-03-12",
+            "not": false
+          }
+        ]
+      },
+      "revenue": 2100,
+      "units": 210,
+      "orders": 191,
+      "asinCount": 4,
+      "rowCount": 5,
+      "truncated": false,
+      "reconciliation": {
+        "calibrationSales": 2100,
+        "gapPct": 0,
+        "ok": true
+      }
+    },
+    "lastWeek": {
+      "from": "2026-03-02",
+      "to": "2026-03-08",
+      "presentDays": 7,
+      "missingDates": [],
+      "outsideCalibration": [],
+      "provisional": false,
+      "exportFilter": null,
+      "revenue": 2800,
+      "units": 280,
+      "orders": 253,
+      "asinCount": 4,
+      "rowCount": 5,
+      "truncated": false,
+      "reconciliation": {
+        "calibrationSales": 2800,
+        "gapPct": 0,
+        "ok": true
+      }
+    },
+    "lastMonth": {
+      "from": "2026-02-09",
+      "to": "2026-02-15",
+      "presentDays": 7,
+      "missingDates": [],
+      "outsideCalibration": [],
+      "provisional": false,
+      "exportFilter": null,
+      "revenue": 2100,
+      "units": 210,
+      "orders": 191,
+      "asinCount": 4,
+      "rowCount": 5,
+      "truncated": false,
+      "reconciliation": {
+        "calibrationSales": 2100,
+        "gapPct": 0,
+        "ok": true
+      }
+    }
+  },
+  "kpis": {
+    "thisWeek": {
+      "value": 2100,
+      "presentDays": 6,
+      "provisional": true
+    },
+    "vsLastWeek": {
+      "basis": "per-present-day",
+      "change": -350,
+      "changePct": -12.5,
+      "direction": "down",
+      "comparable": true,
+      "previous": 2800,
+      "provisional": true
+    },
+    "vsLastMonth": {
+      "basis": "per-present-day",
+      "change": 350,
+      "changePct": 16.7,
+      "direction": "up",
+      "comparable": true,
+      "previous": 2100,
+      "provisional": true
+    }
+  },
+  "topSkus": [
+    {
+      "rank": 1,
+      "asin": "A3",
+      "name": "Gamma Spray – Waterproofing for Shoes a…",
+      "revenue": 1200,
+      "units": 120
+    },
+    {
+      "rank": 2,
+      "asin": "A1",
+      "name": "Alpha Insoles, Size 42 \"Comfort\"",
+      "revenue": 600,
+      "units": 60
+    },
+    {
+      "rank": 3,
+      "asin": "A2",
+      "name": "A2",
+      "revenue": 300,
+      "units": 30
+    }
+  ],
+  "drops": {
+    "provisional": true,
+    "basis": "per-present-day",
+    "items": [
+      {
+        "asin": "A1",
+        "name": "Alpha Insoles, Size 42 \"Comfort\"",
+        "thisWeek": 600,
+        "lastWeek": 1050,
+        "delta": -350,
+        "deltaPct": -33.3
+      }
+    ]
+  },
+  "insightFacts": {
+    "risers": [
+      {
+        "asin": "A2",
+        "name": "A2",
+        "thisWeek": 300,
+        "lastWeek": 280,
+        "delta": 70,
+        "deltaPct": 25
+      }
+    ],
+    "top5SharePct": 100,
+    "asinsSoldThisWeek": 3
+  },
+  "insights": [],
+  "footer": {
+    "text": "Data via DataDoe · Generated 18 Mar 2026 · sales complete through 15 Mar 2026",
+    "notes": [
+      "This week reflects 6 of 7 days."
+    ]
+  },
+  "warnings": []
+}

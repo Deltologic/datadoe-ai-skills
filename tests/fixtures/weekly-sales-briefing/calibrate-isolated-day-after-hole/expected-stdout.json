@@ -1,0 +1,77 @@
+{
+  "currency": {
+    "code": "GBP",
+    "symbol": "£"
+  },
+  "rowCurrency": "GBP",
+  "currencies": [
+    "GBP"
+  ],
+  "calibration": {
+    "from": "2026-01-25",
+    "to": "2026-03-12",
+    "medianSales": 1150,
+    "medianUnits": 115,
+    "medianSessions": 900
+  },
+  "lastCompleteDay": "2026-03-05",
+  "anchorFallback": false,
+  "trafficCompleteThrough": "2026-03-01",
+  "trafficLagDays": 4,
+  "windows": {
+    "thisWeek": {
+      "from": "2026-02-27",
+      "to": "2026-03-05",
+      "presentDays": 7,
+      "missingDates": [],
+      "outsideCalibration": [],
+      "provisional": false,
+      "exportFilter": null
+    },
+    "lastWeek": {
+      "from": "2026-02-20",
+      "to": "2026-02-26",
+      "presentDays": 7,
+      "missingDates": [],
+      "outsideCalibration": [],
+      "provisional": false,
+      "exportFilter": null
+    },
+    "lastMonth": {
+      "from": "2026-01-30",
+      "to": "2026-02-05",
+      "presentDays": 7,
+      "missingDates": [],
+      "outsideCalibration": [],
+      "provisional": false,
+      "exportFilter": null
+    }
+  },
+  "notComplete": [
+    {
+      "date": "2026-03-06",
+      "reason": "no row"
+    },
+    {
+      "date": "2026-03-07",
+      "reason": "no row"
+    },
+    {
+      "date": "2026-03-08",
+      "reason": "no row"
+    },
+    {
+      "date": "2026-03-09",
+      "reason": "no row"
+    },
+    {
+      "date": "2026-03-11",
+      "reason": "unshipped 20% of sales (still filling)"
+    },
+    {
+      "date": "2026-03-12",
+      "reason": "sales below 60% of median"
+    }
+  ],
+  "warnings": []
+}

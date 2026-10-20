@@ -16,33 +16,36 @@ metadata:
 
 Generates a structured Amazon sales briefing for the selected seller from DataDoe production data, rendered as an interactive HTML card artifact.
 
+## Bundled files
+
+| File | Use |
+| --- | --- |
+| `references/data-completeness.md` | The rules for the last complete day, the three windows, effective days, provisional comparisons, export checks and the currency table. Read it before step 1 if you can't run code. |
+| `references/report-data-format.md` | The report data the card is built from, field by field. |
+| `scripts/compute-briefing.js` | Applies those rules: `calibrate` picks the windows, `report` builds the report data. |
+| `scripts/render-briefing.js` | Pastes the report data into the card template. |
+| `references/briefing-template.html` | The card: layout, colours and formatting. |
+
+**If you can run code (Node 18+), use the scripts. Otherwise apply `references/data-completeness.md` yourself and fill `references/briefing-template.html` as `references/report-data-format.md` describes.** Both paths give the same card.
+
 ## Configuration
 
 - **MCP base**: https://mcp.datadoe.com/mcp/v1
 - **Seller**: resolve at run time with `sellers_and_vendors_list` - pick the seller the user
   means (ask if several match), keep its `id` as `sellerOrVendorId`, its `name` for the
   header, and its `marketplaceCountryCode` for the currency. Never hardcode a seller.
-- **Currency**: derive from the marketplace. Note the two spellings: `sellers_and_vendors_list`
-  returns `marketplaceCountryCode: UK` while table columns return `GB` for the same rows -
-  map both (`UK`/`GB` -> GBP £, `DE`/`FR`/`IT`/`ES`/`NL` -> EUR €,
-  `US` -> USD $, `CA` -> CAD $, and so on) and use that symbol everywhere below (written as
-  `{cur}` in this document). Never hardcode one symbol.
+- **Currency**: derive from the marketplace with the table in `references/data-completeness.md`
+  (`sellers_and_vendors_list` says `UK` where table rows say `GB`; map both). It is written as
+  `{cur}` below. Never hardcode one symbol.
 - **Data cost**: both tables used below are premium export (5 AI Tokens instead of 2;
   always-on default dataset, never disabled). Do not print the token cost in the card.
-- **Anchor to the last complete day, not to "today".** Sales on the profit tables run
-  **~1 day behind** (shipped-order sales, refreshed intraday at 10am / 1pm / 4pm - the
-  newest day is still filling), traffic (sessions / page views / buy box) runs **up to 3
-  days behind** and can be revised for up to 30 days, and mid-window gaps still happen.
-  Calendar windows off "today" therefore include partial days and fake a collapse. First
-  detect the last complete day and which days are actually present (workflow step 1). The **last complete day is the last day of
-  the longest recent contiguous run of present days** - not simply the latest present
-  day. An isolated present day after a hole (e.g. one day of data after a 4-day gap) is
-  not an anchor: anchoring there yields a 3/7 "this week" and a fake -58%. Then:
+- **Anchor to the last complete day, not to "today".** Sales run ~1 day behind, traffic up to
+  3 days or more, and mid-window gaps happen, so windows counted from today fake a collapse.
+  The calibration pull (step 1) finds the last complete day; the windows are:
   - **"This week"**: the 7 days ending on the last complete day.
   - **"Last week"**: the 7 days before that.
   - **"Last month"**: the same 7-day window 4 weeks before "this week".
-- Build each window from the **days actually present** and count how many of the 7 have
-  data (effective days) - never assume all 7 are there.
+  Each window counts its **effective days** (days actually present) - never assume all 7.
 - Lightweight by design (the quick sales-only read). For the deep profit / margin / TACoS
   / fee-settlement drill, use **`weekly-business-review`**.
 
@@ -59,73 +62,53 @@ on every export (a filter on `date` does not replace them):
   child ASIN and date**. Used for the three window exports.
 
 Resolve each `sourceId` with `exports_sources_get` (query "profit by date" / "profit by
-sku") and confirm the hit on `tableName`; do not hardcode the ids. Both sit in the
-always-on default dataset, so there is no deprecation warning to carry into the card.
-Key columns:
+sku") and confirm the hit on `tableName`; do not hardcode the ids. Call `exports_source_get`
+on each before `exports_create`. Both sit in the always-on default dataset, so there is no
+deprecation warning to carry into the card. Key columns:
 
 - `amazon_profit_by_date`: date, currency, total_sales, total_units_sold, total_orders,
-  total_sessions
+  total_sessions, unshipped_sales
 - `amazon_profit_by_sku_and_date`: date, child_asin, sku, product_name, total_sales,
   total_units_sold, total_orders (and sales_tax if the user wants ex-VAT)
 
 `total_sales` is sales from **shipped** order items and is **VAT-inclusive** on marketplaces
 where Amazon reports prices with tax (all except US/CA); for ex-VAT revenue also sum
 `sales_tax` and subtract it. The traffic columns (`total_sessions`, `total_page_views`,
-`avg_buybox_percentage`) come from Amazon's Sales and Traffic report and lag **up to 3
-days** (revisable for 30) while sales lag ~1 day - judge their completeness separately
-(step 0).
-
-First a **calibration pull** to find the real data days, then **three window exports**:
-
-0. **Calibration**: one `exports_create` on `amazon_profit_by_date` over the last **~50
-   days** (lag + 35 days - it must cover the 4-weeks-ago window too, which a 30-day pull
-   misses), `groupBy: ["date", "currency"]` (account rows are per date *and* per currency;
-   grouping on `date` alone would merge currencies), aggregations `sum(total_sales)`,
-   `sum(total_units_sold)`, `sum(total_orders)` and `max(total_sessions)` (account-level
-   rows are already one per date, so `max` just carries the day's value through),
-   `orderByColumn: date`, JSON, `limit: 100` (one row per day per currency, ~50 rows).
-   This table has no per-ASIN row count, so completeness is judged on the values:
-   - **Sales-present day**: `total_sales` *and* `total_units_sold` at or above ~60% of
-     their median over the span (relative, per account - never a fixed amount). Sales are
-     shipped-order sales that run ~1 day behind, so expect the newest day (sometimes two)
-     to fall under the threshold - that is the normal lag, not an outage. A day under the
-     threshold inside the span is a gap. **Mandatory cross-check:** add `sum(unshipped_sales)`; a day where it exceeds ~10% of `total_sales + unshipped_sales` is still filling and is NOT complete even if it passes the 60% test (observed: a day at 74% of median sales with 18.5% unshipped flipped the week-over-week sign).
-   - **Traffic-present day**: judged **separately** - `total_sessions` at or above ~60% of
-     its median. Traffic lags far more than sales (Amazon says up to 3 days; measured 11-13
-     days behind on a UK account, with holes), so the traffic-present tail is whatever this
-     detection finds, and the days after it are **traffic-provisional even when their sales
-     are complete**. This briefing is
-     sales-only and anchors on sales presence; if you show any traffic or rate metric,
-     compute it from traffic-present days only and say so in the card.
-   - The **last complete day** = the last day of the **longest recent contiguous run** of
-     sales-present days. Walk back from the tail: skip any isolated present day that sits
-     after a hole and anchor on the run before it (e.g. present 08-30..09-20, hole
-     09-21..09-24, isolated 09-25 -> anchor 09-20, not 09-25). Only if no 7-day contiguous
-     run exists in range, fall back to the latest present day and label every window
-     provisional. Anchor the windows below to the last complete day.
-1. **This week**: the 7 days ending on the last complete day.
-2. **Last week**: the 7 days before that.
-3. **Last month (same window)**: the same 7-day window 4 weeks before "this week".
-   Each window is **one grouped export** on `amazon_profit_by_sku_and_date`
-   (`groupBy [child_asin, product_name]`, see step 2) - never an ungrouped per-day pull:
-   rows on this table are per SKU per day, so a 7-day window at ~1,600 ASINs is well over
-   11k rows and silently overflows the 5,000-row CSV cap (the server returns exactly the
-   limit and warns that rows may be missing).
-   > Tip: Fire the three window exports concurrently, then poll them together. Each
-   > typically completes in under 30 seconds. Poll every 5 seconds. Never give up before completion.
+`avg_buybox_percentage`) come from Amazon's Sales and Traffic report and lag far more than
+sales; judge their completeness separately (`references/data-completeness.md`).
 
 ---
 
 ## Step-by-step Workflow
 
-### 1. Calibrate, then compute date ranges
+Keep every downloaded export as a file (the scripts read CSV or JSON by column name). Prefer
+`exports_raw_url_get` and a GET request for the large window CSVs; `exports_raw_download`
+returns the content inline. Run the commands below from this skill's folder, or give the
+scripts' full paths; pass the full paths of your data files.
 
-First run the calibration pull (Data Source step 0): list the dates actually present in
-the last ~50 days and pick the **last complete day** (end of the longest recent contiguous
-run of present days - not an isolated day after a hole). Compute the three windows anchored
-to that day (not to "today"), formatted `YYYY-MM-DD`, check that all three fall inside the
-calibration span, and note which dates inside each window are missing - you'll disclose
-effective days per window later.
+### 1. Calibration pull and windows
+
+One `exports_create` on `amazon_profit_by_date` over the last **~50 days** (lag + 35 days -
+it must cover the 4-weeks-ago window too, which a 30-day pull misses):
+
+- `groupBy: ["date", "currency"]` (account rows are per date *and* per currency; grouping on
+  `date` alone would merge currencies);
+- aggregations `sum(total_sales)` as `sales`, `sum(total_units_sold)` as `units`,
+  `sum(total_orders)` as `orders`, `max(total_sessions)` as `sessions` (account-level rows
+  are already one per date, so `max` just carries the day's value through) and
+  `sum(unshipped_sales)` as `unshipped` (the still-filling check);
+- `orderByColumn: date`, JSON, `limit: 100` (one row per day per currency, ~50 rows).
+
+Then find the last complete day and the three windows:
+
+```bash
+node scripts/compute-briefing.js calibrate --calibration calibration.json --marketplace UK
+```
+
+Without code, apply `references/data-completeness.md`. The result is the card currency, the
+anchor (`lastCompleteDay`), the `from` / `to` of each window, its effective days, its
+`exportFilter` (the incomplete days to leave out) and the days that failed the completeness
+test with the reason. Check that all three windows fall inside the calibration span.
 
 ### 2. Create three exports
 
@@ -134,9 +117,11 @@ Call `exports_create` three times (one per window, concurrently if possible) wit
 - `sellerOrVendorIds`: `[<id from sellers_and_vendors_list>]` (an array, not a singular key)
 - `sourceId`: the id resolved above for `amazon_profit_by_sku_and_date`
 - `groupBy`: `["child_asin", "product_name"]` - one row per ASIN for the whole window
-  (~2,500 rows here), so the export stays under the 5,000-row CSV cap; it also folds an
-  ASIN's several SKU rows into one. Do **not** request `date` ungrouped per ASIN: a
-  7-day window is 11k+ rows and gets truncated at the cap.
+  (~2,500-3,000 rows on a large catalog), so the export stays under the 5,000-row CSV cap;
+  it also folds an ASIN's several SKU rows into one. Do **not** request `date` ungrouped per
+  ASIN: rows on this table are per SKU per day, so a 7-day window at ~1,600 ASINs is well
+  over 11k rows and silently overflows the cap (the server returns exactly the limit and
+  warns that rows may be missing).
 - `aggregations`: `sum(total_sales)` as `sales`, `sum(total_units_sold)` as `units`,
   `sum(total_orders)` as `orders` (optionally `countDistinct(date)` as `days` to see how
   many days each ASIN sold on, and `sum(sales_tax)` as `tax` for an ex-VAT view).
@@ -146,84 +131,95 @@ Call `exports_create` three times (one per window, concurrently if possible) wit
   double-counts every multi-SKU ASIN. If you need traffic, run a separate export
   `groupBy ["date", "child_asin"]` with `max()` for those three columns and add them
   across days in code - never `sum()` them in the grouped export.
-- `outputType`: `"CSV"`, `limit`: `5000` (both are required by `exports_create`)
-- `from` / `to`: the appropriate window per export - mandatory on this table
+- `outputType`: `"CSV"`, `limit`: `5000` (both are required by `exports_create`). The rows
+  include ASINs with 0 sales in the window; that is expected.
+- `filters`: the window's `exportFilter` from step 1 when it has incomplete days
+  (`date notIn <dates>`), so their partial sales don't inflate the per-day comparison; and,
+  if the calibration shows sales in more than one currency, `currency = <card currency>`
+  (the currency from step 1), so the card keeps one currency
+- `from` / `to`: the window's dates from step 1 - mandatory on this table
   (`requiresDatePeriod: true`); these are the only accepted date keys, the legacy camelCase
   names are rejected and a `date` filter does not replace them
 
-If any export returns `rowCount` equal to the limit, the catalog is larger than the cap -
-say so and do not treat the totals as complete.
+> Tip: Fire the three window exports concurrently, then poll them together. Each
+> typically completes in under 30 seconds. Poll every 5 seconds. Never give up before completion.
 
 ### 3. Poll until complete
 
-Poll each export's status every 5 seconds. When all three are `COMPLETED`, download the raw CSV/JSON content.
+Poll each export's status every 5 seconds. When all three are `COMPLETED`, download the raw
+content and save each as a file.
 
-### 4. Aggregate per ASIN
+### 4. Build the report data
 
-Each window export already comes back as one row per `child_asin` + `product_name` with
-summed `sales` / `units` / `orders` - that is the revenue per ASIN per period. Sum the rows
-for the window total; it should closely match the calibration's per-day `sum(total_sales)`
-from `amazon_profit_by_date` over the same dates and currency (a cheap reconciliation - a
-material gap means an export was truncated).
-**Count effective (present) days per window** (out of 7) from the calibration data. If a
-window has < 7 present days, either normalize the comparison to a per-present-day basis OR
-label that window **provisional** and state how many days it reflects. Check ALL windows -
-an under-counted last week fakes a boom just as a partial this week fakes a collapse.
+```bash
+node scripts/compute-briefing.js report --calibration calibration.json \
+  --this-week this-week.csv --last-week last-week.csv --last-month last-month.csv \
+  --seller "<seller name>" --marketplace UK --generated <today, YYYY-MM-DD> \
+  --out report-data.json
+```
 
-### 5. Compute KPIs
+Without code, build the same object by hand from `references/report-data-format.md`. Either
+way the report data holds:
 
-- **This week revenue**: sum of `total_sales` for this week
-- **vs last week**: absolute `{cur}` change + % change
-- **vs last month (same window)**: absolute `{cur}` change + % change
+- **KPIs**: this week's revenue, and the change vs last week and vs last month (same window)
+  in `{cur}` and %. A comparison with a provisional window (< 7 effective days) is made per
+  present day, scaled to 7 days, and labelled provisional - never present a partial-week
+  delta as a real move.
+- **Top 5 SKUs** by this week's revenue (one row per child ASIN, its SKUs folded together):
+  ASIN, product name (cut to 40 characters), revenue, units.
+- **Top 3 drops vs last week**: ASINs with revenue in both weeks and the most negative
+  `{cur}` change, with this week, last week, `{cur}` and % change. If either week is
+  provisional, the drops are ranked per present day and labelled provisional (a 3/7 week
+  would otherwise print every hero SKU as a -50..-80% drop).
+- **Checks**: each window's export total against the calibration total for the same dates
+  (a material gap means an export was truncated), and any export whose row count equals its
+  `limit`. The script puts both on the card as footer notes and lists them in `warnings`;
+  say so in your reply too, and do not treat truncated totals as complete.
 
-If any window is provisional (< 7 present days), mark the affected KPI provisional and do
-NOT present a partial-week delta as a real move. If you show any rate metric (conversion /
-buy-box), remember there is no conversion column on this table - compute conversion as
-`total_units_sold / total_sessions` (or `total_orders / total_sessions`) from the
-per-ASIN `max()` traffic export (step 2), use traffic-present days only (the newest ~3
-days of traffic are provisional even when sales are complete) and flag it provisional too.
+### 5. Rate metrics (only if the user asks)
 
-### 6. Rank SKUs
+There is no conversion column on these tables. Compute conversion as
+`total_units_sold / total_sessions` (or `total_orders / total_sessions`) from the per-ASIN
+`max()` traffic export (step 2), use traffic-present days only (the newest days of traffic
+are provisional even when sales are complete) and flag it provisional too.
 
-- **Top 5 by revenue this week**: sort by this week's `total_sales` descending, take top 5. Show ASIN, product name (truncated to ~40 chars), revenue, units.
-- **Top 3 drops vs last week**: compute `this_week_revenue - last_week_revenue` per ASIN. Sort ascending (most negative first), take top 3. Show ASIN, name, this week revenue, last week revenue, and `{cur}` / % drop. Only include ASINs that had revenue in both periods.
-  **Same provisional guard as the KPI block:** if either window has < 7 effective days,
-  the "drops" are just the biggest SKUs seen for fewer days (a 3/7 week prints every hero
-  SKU as a -50..-80% drop). Either rank on per-present-day revenue and label the section
-  provisional, or suppress the section and say why - never present partial-week drops as
-  real moves.
+### 6. Write 1–2 insights
 
-### 7. Generate 1–2 insights
-
-Write short, sharp observations using the data. Examples:
+Write 1–2 short, sharp observations (required, one sentence each) from the report data,
+including `insightFacts` (top risers, top-5 share) and `warnings`. Pass them to the renderer
+with `--insight` (step 7), or write them into the report data's `insights` array. Examples:
 
 - "Revenue down 8% WoW, driven by SKU X dropping {cur}Y"
 - "Top performer [SKU] up {cur}Z vs last week"
 - "3 SKUs declined >20% WoW — may indicate stock or ranking issues"
-  Keep each insight to one sentence.
 
-### 8. Render the HTML card artifact
+### 7. Render the HTML card artifact
 
-## Produce a single-file HTML artifact. See the **Output Format** section below.
+```bash
+node scripts/render-briefing.js --data report-data.json --out briefing.html \
+  --insight "<first insight>" --insight "<second insight>"
+```
+
+Without code, paste the report data into a copy of `references/briefing-template.html` as
+`references/report-data-format.md` describes. Deliver the single-file HTML as the artifact.
 
 ## Output Format
 
-Render a polished, self-contained HTML card. Requirements:
+The template already implements the card; don't redesign it unless the user asks:
 
-- **Dark/neutral palette** — professional seller-dashboard aesthetic
-- **Four sections** clearly delineated:
-  1. **KPI Block** — three metric tiles: This Week Revenue / vs Last Week / vs Last Month. Use color coding: green for positive, red for negative, neutral for flat. Mark a KPI **provisional** when its window has < 7 present days.
-  2. **Top 5 SKUs by Revenue** — clean table or card list. Show rank, product name (truncated), ASIN, revenue (`{cur}`), units sold.
-  3. **Biggest Drops vs Last Week** — top 3 ASINs with largest `{cur}` decline. Show name, this week `{cur}`, last week `{cur}`, Δ`{cur}`, Δ%. Label the section **provisional** (or replace it with a one-line explanation) when either window has < 7 present days.
-  4. **Insights** — 1–2 bullet points in a highlighted panel.
-- **Header**: "<seller name from `sellers_and_vendors_list`> — Weekly Sales Briefing", subtitle showing the anchored date range and completeness (e.g. "14–24 Jul 2026 · this week 5/7 days present — provisional")
+- Dark, neutral seller-dashboard palette; self-contained (no external dependencies);
+  readable at desktop artifact width and on a phone.
+- **Header**: "<seller name> — Weekly Sales Briefing" with the anchored date range and
+  completeness (e.g. "14–20 Jul 2026 · this week 6/7 days present, last week 7/7 — provisional").
+- **Four sections**: KPI tiles (green up, red down, neutral flat, provisional badge when a
+  window has < 7 effective days), Top 5 SKUs by revenue, Biggest drops vs last week
+  (provisional label when a week is incomplete), Insights.
 - **Footer**: "Data via DataDoe · Generated [today's date] · sales complete through
-  [last complete day]". When a window is provisional, say how many days it reflects. If
-  the card shows any traffic or rate figure and its window includes days after the last
-  traffic-complete day, add one line: "Sessions / page views for [dates] are provisional -
-  Amazon traffic data lags sales by {n} days here and may be revised." Do not print token costs.
-- No external dependencies (pure HTML/CSS/JS, inline everything)
-- Responsive — readable at typical desktop artifact width
+  [last complete day]", one line per provisional window with how many days it reflects, and
+  any export-check notes. If you add any traffic or rate figure whose window includes days
+  after the last traffic-complete day, add: "Sessions / page views for [dates] are
+  provisional - Amazon traffic data lags sales by {n} days here and may be revised." Do not
+  print token costs.
 
 ---
 
@@ -231,7 +227,7 @@ Render a polished, self-contained HTML card. Requirements:
 
 - If an export fails, retry once. If it fails again, note the error in the artifact and show partial data.
 - If `exports_create` rejects the request over a missing date period, you omitted `from` / `to` - both tables require them (`requiresDatePeriod: true`).
-- Lag/gaps are handled up front by anchoring to the last complete day (step 1 - the end of the longest contiguous run, so a hole right before the tail moves the anchor back past it), not by ad-hoc shifting afterwards. The newest day (sometimes two) falling under the sales threshold is the normal ~1-day shipped-sales lag; traffic trailing by up to 3 days is normal too - neither is an error. If a specific date inside a window is still missing, treat it as a gap (reduce that window's effective-day count and disclose it) rather than blindly shifting the whole window.
+- Lag and gaps are handled up front by anchoring to the last complete day (step 1), not by ad-hoc shifting afterwards. The newest day (sometimes two) failing the completeness test is the normal shipped-sales lag, and traffic trailing sales is normal too - neither is an error. A missing date inside a window lowers that window's effective days (disclosed on the card); it does not shift the whole window.
 - If `product_name` is empty for an ASIN, display the ASIN itself as the label.
 - Rate limit (HTTP 429): wait the `Retry-After` seconds, then retry.
 
@@ -245,6 +241,5 @@ for every seller. For a multi-account org, run the briefing once per seller (one
 `sellerOrVendorIds` entry per run) rather than mixing currencies in one card; both
 profit tables carry a `currency` column (the calibration rows are per date and
 currency), so if one seller reports in more than one currency, keep one currency per
-card as well. The
-three-window rolling comparison (this week / last week / same window 4 weeks ago) works for
-any marketplace and any granularity.
+card as well. The three-window rolling comparison (this week / last week / same window 4
+weeks ago) works for any marketplace and any granularity.
