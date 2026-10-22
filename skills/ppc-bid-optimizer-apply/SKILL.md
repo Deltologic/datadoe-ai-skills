@@ -200,3 +200,6 @@ actionId: null`) even when Actions are disabled - so the preview is always safe 
   (negate the truly dead terms).
 - A DataDoe skill, built on DataDoe `amazon_ads_search_terms_by_campaign_by_date` +
   the `AMAZON_ADS_TARGETS_FIND` / `AMAZON_ADS_TARGETS_UPDATE` actions.
+- Product profit bids (break-even from fees and product cost, a target ACoS
+  from conversion, bid = sales per click × target) are `ppc-profit-bid-apply`.
+  This skill still uses one target ACoS for the account.
