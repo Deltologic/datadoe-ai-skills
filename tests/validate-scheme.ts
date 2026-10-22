@@ -2,11 +2,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 /**
- * Scheme-aware check: every backticked `amazon_*` identifier used in the skills must exist
- * in DataDoe's public data scheme, either as a table name or as a column name. Catches
- * typos and references to removed tables/columns. Runs against the live spec; when the
- * spec cannot be fetched (offline CI) it logs a warning and passes, unless
- * REQUIRE_SCHEME_CHECK=1 is set.
+ * Scheme-aware check: every `amazon_*` identifier used in the skills (backticked in Markdown,
+ * quoted in bundled scripts) must exist in DataDoe's public data scheme, either as a table
+ * name or as a column name. Catches typos and references to removed tables/columns. Runs
+ * against the live spec; when the spec cannot be fetched (offline CI) it logs a warning and
+ * passes, unless REQUIRE_SCHEME_CHECK=1 is set.
  */
 
 const SCHEME_URL = 'https://api.datadoe.com/api/v1/spec/data-scheme';
@@ -68,14 +68,17 @@ function collectDeprecations(sources: Source[]): Deprecations {
 function findDeprecatedUsages(file: string, deprecations: Deprecations): string[] {
   const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
   const text = lines.join('\n');
+  const quote = identifierQuote(file);
   const referencedTables = new Set<string>();
-  for (const match of text.matchAll(/`(amazon_[a-z0-9_]+)`/g)) {
+  for (const match of text.matchAll(new RegExp(`${quote}(amazon_[a-z0-9_]+)${quote}`, 'g'))) {
     referencedTables.add(match[1]);
   }
   const findings: string[] = [];
   lines.forEach((line, index) => {
     if (isWarningLine(line)) return;
-    for (const match of line.matchAll(/`(amazon_[a-z0-9_]+)(?:\.([a-z0-9_]+))?`/g)) {
+    for (const match of line.matchAll(
+      new RegExp(`${quote}(amazon_[a-z0-9_]+)(?:\\.([a-z0-9_]+))?${quote}`, 'g'),
+    )) {
       const [, id, dotted] = match;
       if (deprecations.tables.has(id)) {
         findings.push(`${id} (line ${index + 1}): ${deprecations.tables.get(id)}`);
@@ -84,7 +87,7 @@ function findDeprecatedUsages(file: string, deprecations: Deprecations): string[
         findings.push(`${id}.${dotted} (line ${index + 1}): ${deprecations.columns.get(dotted)!.reason}`);
       }
     }
-    for (const match of line.matchAll(/`([a-z0-9_]+)`/g)) {
+    for (const match of line.matchAll(new RegExp(`${quote}([a-z0-9_]+)${quote}`, 'g'))) {
       const column = match[1];
       const dep = deprecations.columns.get(column);
       if (!dep) continue;
@@ -100,21 +103,35 @@ function findDeprecatedUsages(file: string, deprecations: Deprecations): string[
   return [...new Set(findings)];
 }
 
-function listMarkdownFiles(dir: string): string[] {
+const SCRIPT_EXTENSIONS: ReadonlySet<string> = new Set(['.js', '.mjs', '.cjs', '.py']);
+
+function isScriptFile(file: string): boolean {
+  return SCRIPT_EXTENSIONS.has(path.extname(file));
+}
+
+/** Skill Markdown files plus bundled scripts (scripts quote identifiers instead of backticking them). */
+function listSkillTextFiles(dir: string): string[] {
   const out: string[] = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...listMarkdownFiles(full));
-    else if (entry.isFile() && entry.name.endsWith('.md')) out.push(full);
+    if (entry.isDirectory()) out.push(...listSkillTextFiles(full));
+    else if (entry.isFile() && (entry.name.endsWith('.md') || isScriptFile(entry.name))) out.push(full);
   }
   return out;
+}
+
+/** Markdown marks identifiers with backticks; scripts put them in string literals. */
+function identifierQuote(file: string): string {
+  return isScriptFile(file) ? `['"\`]` : '`';
 }
 
 function collectIdentifiers(file: string): Map<string, number[]> {
   const found = new Map<string, number[]>();
   const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
+  const quote = identifierQuote(file);
+  const pattern = new RegExp(`${quote}(amazon_[a-z0-9_]+)(?:\\.[a-z0-9_]+)?${quote}`, 'g');
   lines.forEach((line, index) => {
-    for (const match of line.matchAll(/`(amazon_[a-z0-9_]+)(?:\.[a-z0-9_]+)?`/g)) {
+    for (const match of line.matchAll(pattern)) {
       const id = match[1];
       if (!found.has(id)) found.set(id, []);
       found.get(id)!.push(index + 1);
@@ -159,7 +176,7 @@ describe('skills reference only tables and columns that exist in the DataDoe dat
     }
   });
 
-  const files = listMarkdownFiles(skillsDir).map((file) => path.relative(repoRoot, file));
+  const files = listSkillTextFiles(skillsDir).map((file) => path.relative(repoRoot, file));
 
   test.each(files)('%s', (relativeFile) => {
     if (!known) return;
@@ -178,7 +195,7 @@ describe('skills reference only tables and columns that exist in the DataDoe dat
  * failure once the migration off the deprecated sources is agreed.
  */
 describe('skills do not build on tables or columns the DataDoe data scheme marks deprecated', () => {
-  const files = listMarkdownFiles(skillsDir).map((file) => path.relative(repoRoot, file));
+  const files = listSkillTextFiles(skillsDir).map((file) => path.relative(repoRoot, file));
   const strict = process.env.REQUIRE_NO_DEPRECATED === '1';
 
   test.each(files)('%s', (relativeFile) => {
