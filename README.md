@@ -75,42 +75,6 @@ To install selected skill from this repository use the following command:
 npx skills@latest add Deltologic/datadoe-ai-skills --skill SKILL_NAME
 ```
 
-## Skill Structure
-
-Each skill lives in `skills/<skill-name>/`. Only `SKILL.md` is required; the three folders follow the [Agent Skills specification](https://agentskills.io/specification#directory-structure):
-
-```text
-skills/<skill-name>/
-├── SKILL.md      # required: frontmatter, workflow, approval gates, output format
-├── references/   # optional: detailed rules, long sections and exact templates (HTML cards, starter code)
-├── scripts/      # optional: calculation and rendering helpers
-└── assets/       # optional: plain-text resources only (md, txt, json, csv)
-```
-
-Rules for the optional folders:
-
-- `SKILL.md` names every bundled file by its path (for example `references/data-completeness.md`) and says when to read or run it. Keep `SKILL.md` under ~500 lines by moving long detail to `references/`, not copying it.
-- Scripts only calculate or render. They make no network calls and never call DataDoe Actions: the agent fetches data through MCP and passes the export files in. Read export columns by header name, because DataDoe prepends utility columns. Use Node 18+ with no dependencies; Python 3 with `openpyxl` only for Excel workbooks.
-- Many MCP clients can't run code, so every script has a fallback: `SKILL.md` says "If you can run code, use `scripts/…`; otherwise apply `references/…` yourself", and that reference holds the same rules in prose.
-- Templates that must stay exact (HTML cards, email bodies, starter code) go to `references/`. DataDoe Skills stores `references/` and `scripts/` unchanged but converts every `assets/` file to Markdown, which strips HTML markup, CSS and JS. Use `assets/` only for md, txt, json or csv files, each at most 2 MB.
-- Nothing else goes at the skill root: DataDoe Skills imports only `SKILL.md` and these three folders.
-
-### Script fixtures
-
-Every script has at least one fixture case in `tests/fixtures/<skill-name>/<case-name>/case.json`, run by `yarn test`:
-
-```json
-{
-  "command": ["node", "scripts/compute-report.js", "--input", "${case}/input.csv", "--out", "${out}/report.html"],
-  "stdout": "expected-stdout.json",
-  "files": { "report.html": "expected-report.html" }
-}
-```
-
-The command runs from the skill folder. `${case}` is the case folder, `${out}` a temporary output folder and `${skill}` the skill folder. A helper script counts as covered when a script that a fixture runs loads it, directly or through other helpers. `stdout` and `files` name expected outputs in the case folder; `.json` files are compared as JSON, everything else as text. Set at least one of them.
-
-`yarn test` also checks that every path `SKILL.md` names exists, that no bundled file is unused, and that assets are plain text within the size limit.
-
 ## External Links
 
 - [DataDoe AI Agents & Skills (Hub)](https://app.datadoe.com/hub/ai-agents-and-skills)
