@@ -108,8 +108,16 @@ sales-only snapshot use the **Weekly Sales Briefing** instead. Live from DataDoe
   completeness separately** (fees post after sales; see step 3). If the review reads the
   traffic columns, treat them as a third completeness tier: a day can be sales- and
   fee-complete while `total_sessions` is still zero or partial for a week or more - detect
-  the last traffic-complete day from the daily `total_sessions` the same way, and label
-  any conversion / buy-box figure that includes later days provisional.
+  the last traffic-complete day the same way and label any conversion / buy-box figure
+  that includes later days provisional. For account-level figures use the daily account
+  `total_sessions`; when watch-outs read **per-ASIN** conversion or buy box, use the
+  per-ASIN count instead, because per-ASIN traffic can trail the account total by a day
+  (a day with full account sessions and no child-ASIN traffic reads as a buy-box collapse
+  on every ASIN): the Sales Movers probe - one export on `amazon_profit_by_sku_and_date`,
+  `filters` `total_sessions > 0` and `marketplace_country_code` = the marketplace,
+  `groupBy [date]`, `countDistinct` on `child_asin`; a missing date counts as 0, and a day
+  passes at ~60% of the median daily count. Weight per-ASIN buy box by `total_page_views`
+  and leave out ASIN-days with 0 page views.
 - **Weekly buckets are built in code, not with `dateInterval WEEK`.** `dateInterval WEEK`
   returns fixed Sunday-start calendar buckets regardless of `from`, and its newest bucket
   includes the partial current day; no request parameter shifts the boundary to the last
@@ -204,15 +212,20 @@ sales-only snapshot use the **Weekly Sales Briefing** instead. Live from DataDoe
    FBA-fee share moves, or step 3 flagged a day as
    "a posted-date bill landed", run one export on `amazon_settlements_with_cogs` over the
    review span (the 8 weeks; pass `from` / `to` - `requiresDatePeriod: true`):
-   `groupBy [date, currency]`, sum `fba_storage_fee`, `long_term_storage_fee` and
-   `fba_disposal_fee` with distinct aliases. Settlement sign: negative = cost, positive =
-   a credit. On the first run, check `date` against `transaction_posted_date` for the
-   bill rows (they matched on every bill on a UK account, Nov 2026); if they differ, use
-   the one whose days match the fee spikes in step 3. Name each bill and the day it
-   posted - FBA storage posts around the 7th of the month, long-term storage around the
-   19th-20th - and show the week's margin with and without these bills
-   (`(profit_sum + bills) / sales_sum`, bills as positive costs). They are normal monthly
-   bills, not reimbursement candidates.
+   `groupBy [date, currency]`, sum `fba_storage_fee`, `long_term_storage_fee`,
+   `fba_disposal_fee`, `fba_inbound_placement_service_fee` and
+   `fba_inbound_transportation_fee` with distinct aliases. Settlement sign: negative =
+   cost, positive = a credit. On the first run, check `date` against
+   `transaction_posted_date` for the bill rows (they matched on every bill on a UK
+   account, Nov 2026); if they differ, use the one whose days match the fee spikes in
+   step 3. Name each bill and the day it posted - FBA storage posts around the 7th of the
+   month, long-term storage around the 19th-20th; inbound placement and transportation
+   post when a shipment is billed - and show the week's margin with and without these
+   bills (`(profit_sum + bills) / sales_sum`, bills as positive costs). They are normal
+   bills, not reimbursement candidates. When a day flagged in step 3 matches none of the
+   exported bills, say so: "an unnamed posted-date fee of about {cur}X on {date}" (X = that
+   day's `total_fees` minus its trailing fee ratio x its sales), not a storage bill, and
+   leave it inside "margin without bills".
 8. **Movers (full per-SKU totals, diffed client-side).** `exports_create` twice on
    `amazon_profit_by_sku_and_date` - once for this week, once for last week (the windows
    anchored in step 3) - `groupBy [sku, product_name]`, sum `profit`, `total_sales`,
@@ -238,7 +251,7 @@ via DataDoe". If the client cannot render HTML, fall back to the text layout bel
 ```
 Weekly Insights - {marketplace} - week of {start} (ends {last complete day})   (vs 4-wk median)
 Period: this week = {n}/7 complete days{ - PROVISIONAL if < 7}; gaps: {dates or none}{; left out: {date} - {n}% unshipped / referral fees {x}% posted}.
-        Sales are shipped sales; ordered incl. unshipped {cur}.. ({+/-}% vs last wk).
+        Sales are shipped sales; shipped + unshipped {cur}.. ({+/-}% vs last wk; pending orders not included, so below Seller Central's ordered sales).
 
             This wk    vs last wk   vs normal(4wk median)
 Sales       {cur}..    {+/-}%       {+/-}%
@@ -253,7 +266,8 @@ Why (if > 5pp off normal or > 2pp vs last week): margin {m}% vs normal {b}% / la
   from {x}% to {y}% of sales in wk {date}.
   Cost mix (% of sales): VAT {v}%  fees {f}% (FBA {fb}%, referral {r}%)  COGS {c}%  ads {a}%  refunds {rc}%  -> margin {m}%
   {if a day in the week failed the referral-fee test: "Margin provisional: {date} is fee-incomplete (referral fees {x}% of sales vs ~{y}% trailing)."}
-Bills        {FBA storage {cur}.. on {date}; long-term storage {cur}.. on {date}} in the 8 weeks - margin without them {m2}% (normal {b2}%).
+Bills        {FBA storage {cur}.. on {date}; long-term storage {cur}.. on {date}; inbound {cur}.. on {date}} in the 8 weeks - margin without them {m2}% (normal {b2}%).
+             {if a flagged day matched no bill: "Unnamed posted-date fee of about {cur}X on {date}."}
              (Shown whenever step 7 ran the settlements export, even with no anomaly.)
 
 Top movers   +{sku} {cur}..   -{sku} {cur}..

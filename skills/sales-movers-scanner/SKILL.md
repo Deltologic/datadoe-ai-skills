@@ -71,12 +71,15 @@ recent window to the prior equal window, then for each big mover decompose:
 
    The driver is the term with the largest absolute value **in the direction of the
    move** (the most negative term for a decliner, the most positive for a gainer).
-   Relabel a conversion-led move as **buy-box** when the page-view-weighted buy box fell
-   by at least 10 points. When sessions are 0 in either window the split is undefined:
+   Relabel a conversion-led move as **buy-box** when the page-view-weighted buy box moved
+   by at least 10 points in the direction of the move (fell for a decliner, rose for a
+   gainer); a rise from ~0 is **availability** (back in stock / newly buyable), not a
+   buy-box win. When sessions are 0 in either window the split is undefined:
    mark the driver **n/a** (no traffic data) rather than guessing. When units are 0 in
    either window, it is **availability** (went to or came back from zero - see below).
    Then route it: traffic -> rank/ads/suppression check; conversion -> listing/price/reviews
-   (or, on a gainer, a listing/offer win to protect); buy-box -> pricing/competitor;
+   (or, on a gainer, a listing/offer win to protect); buy-box -> pricing/competitor (or,
+   on a gainer, the offer won back - hold the price and stock that won it);
    price -> confirm the change was intended.
 4. **Roll up**: is the catalog move concentrated in a few SKUs or broad? One suppressed
    hero SKU vs an across-the-board seasonal dip are very different stories.
@@ -183,8 +186,13 @@ under-counted prior window fakes a boom (every SKU reads as a riser). Guard both
        more (observed: 5,433 account sessions on a day where **0** child ASINs had
        sessions, against a median of ~1,390 per day - every product then read as a
        traffic drop and every buy box fell ~15 points). Run one probe export on
-       `amazon_profit_by_sku_and_date` over the same span: `filters` `total_sessions > 0`,
-       `groupBy: ["date"]`, aggregation `countDistinct` on `child_asin` as
+       `amazon_profit_by_sku_and_date` over the same span: `filters` `total_sessions > 0`
+       and `marketplace_country_code` = the scanned marketplace (the column holds the ISO
+       code - `GB` for the UK, not `UK`; an `in` filter with the value `GB,UK` works when
+       unsure). Without the marketplace filter, a seller whose marketplaces share most child
+       ASINs passes a day on another marketplace's traffic, and every product of the
+       scanned one reads as a traffic drop again. `groupBy: ["date"]`, aggregation
+       `countDistinct` on `child_asin` as
        `asins_with_sessions`, `orderByColumn: date`, JSON, `limit: 100` (one row per day,
        ~45 rows). A date with no ASIN traffic at all returns **no row** - count it as 0.
        The day passes when its count is at least ~60% of the median daily count (the same
@@ -206,9 +214,11 @@ under-counted prior window fakes a boom (every SKU reads as a riser). Guard both
    End both windows at the window end found above (the traffic window end when you report
    drivers).
 4. **Pull both windows per day and per ASIN** from `amazon_profit_by_sku_and_date`
-   (CSV, `limit: 5000`, `from` / `to` mandatory): `groupBy [date, child_asin,
+   (CSV, `limit: 5000`, `from` / `to` mandatory), filtered to the scanned marketplace
+   (`marketplace_country_code`, as in the step-3 probe) so the per-day ASIN counts in step 5
+   are for one marketplace: `groupBy [date, child_asin,
    product_name]` (add `marketplace_country_code` or `currency` to `columns` + `groupBy`
-   if you need them - they are not emitted otherwise) with aggregations `sum(total_sales)`,
+   if you need them in the rows - they are not emitted otherwise) with aggregations `sum(total_sales)`,
    `sum(total_units_sold)`, `sum(total_orders)`, and **`max(total_sessions)`,
    `max(total_page_views)`, `max(avg_buybox_percentage)`** - `max`, not `sum`, because
    those three repeat on every SKU row of the ASIN (see Configuration); `max` collapses
@@ -286,6 +296,7 @@ TOP DECLINERS (by money lost)
 TOP GAINERS (by money gained)
   {product name} / {ASIN}     {cur}.. -> {cur}..   traffic +{x}%       sessions {a}->{b}       protect / scale ads
   {product name} / {ASIN}     {cur}.. -> {cur}..   conversion +{x}%    CVR {a}%->{b}%          listing/offer win - protect
+  {product name} / {ASIN}     {cur}.. -> {cur}..   buy-box +{x}pp      bb {a}%->{b}%           offer won back - hold price/stock
 
 Biggest single swing: {product name} / {ASIN} {cur}{delta} - {driver} -> {lever}
 ```
