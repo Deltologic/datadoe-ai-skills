@@ -155,8 +155,16 @@ Report the first gate that fails, biggest-revenue SKU first.
    daily per-SKU series (`groupBy [date, child_asin, product_name]` is ~46k rows on a
    1,500-ASIN catalog vs the 5,000-row cap; the export truncates inside day 4). Every
    per-ASIN export below takes `max()` of the traffic columns and `sum()` of sales/units.
+   **One marketplace per run:** every export in this step, (a) to (d), also filters
+   `marketplace_country_code` to the scanned marketplace. A seller with several
+   marketplaces shares most child ASINs across them, and Amazon can publish their traffic
+   on different days, so an unfiltered probe lets another marketplace's traffic mark a day
+   complete - bb_now is then read on a day with no traffic data for the scanned one. The
+   column holds the ISO code (`GB` for the UK, not `UK`); an `in` filter with the value
+   `GB,UK` works when unsure.
    Run these exports instead, all of which fit the cap:
-   - **(a) Calibration, per ASIN:** last 45 days, filter `total_page_views > 0`, `groupBy
+   - **(a) Calibration, per ASIN:** last 45 days, filters `total_page_views > 0` and the
+     marketplace, `groupBy
      [date]`, `countDistinct(child_asin) as asins_with_traffic` (~45 rows). A date that is
      missing from the result had no per-ASIN traffic at all - count it as 0. A day is
      **traffic-complete** when `asins_with_traffic` >= 80% of the median of the 7 complete
@@ -194,7 +202,7 @@ Report the first gate that fails, biggest-revenue SKU first.
    - **(d) 7-day trend for the candidates (mandatory):** the **7 most recent complete days
      up to and including the anchor** from (a) - skip hole days, and say so when the window
      had to reach back past a hole - `groupBy [date, child_asin]`, `filters: child_asin in
-     (...)`, `max(avg_buybox_percentage)` + `max(total_page_views)` per ASIN-day ->
+     (...)` and the marketplace, `max(avg_buybox_percentage)` + `max(total_page_views)` per ASIN-day ->
      **bb7** = page-view-weighted bb over those 7 days (`sum(bb x page_views) /
      sum(page_views)`), to tell "just lost it" from "chronically low" and to confirm the
      anchor-day read is not a one-day dip on a handful of page views.
@@ -311,8 +319,8 @@ have flagged. Same signal, different fix - the skill picks the right one.
 ## Quality self-check
 
 - Did I judge completeness on the **per-ASIN** rows (`countDistinct(child_asin)` with page
-  views > 0, missing dates = 0), anchor on the newest complete day ending a run of 3+, and
-  name the anchor, lag and every hole?
+  views > 0, missing dates = 0) **for the scanned marketplace only**, anchor on the newest
+  complete day ending a run of 3+, and name the anchor, lag and every hole?
 - Did I apply the traffic floor (anchor-day `total_page_views` >= 20 or 7-day >= 50, or the
   scaled floors when the user set one) so a 0% read on a handful of page views is "no data"?
 - Did I take `max()` of `avg_buybox_percentage` / `total_page_views` / `total_sessions`
@@ -342,6 +350,9 @@ have flagged. Same signal, different fix - the skill picks the right one.
   ASIN that dipped and recovered reads as a chronic loss.
 - Summing `total_sessions`, `total_page_views` or `avg_buybox_percentage` across the SKU
   rows of one ASIN - they are per-ASIN values repeated on every SKU row.
+- Running the step-3 exports without a marketplace filter on a multi-marketplace seller -
+  another marketplace's published traffic marks a day complete, and every ASIN of the
+  scanned one reads as a buy-box loss on it.
 - Comparing a 30-day average buy-box to a single-day price snapshot - two different time
   bases; pair the anchor day with the anchor day.
 - Pulling the full 30-day daily per-SKU series - it blows the 5,000-row cap and silently
