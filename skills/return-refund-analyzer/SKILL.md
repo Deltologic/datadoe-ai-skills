@@ -191,10 +191,12 @@ the one lever that moves it - and separately note how much of the volume is unfi
 
 Keep every export small and aggregated on the server, and read it with `exports_raw_download`
 (CSV). In claude.ai and other chat clients the export lands in the conversation as text: a
-SKU-level pull of the whole catalog (thousands of rows) is too big to read there, and the run
-then splits it into many improvised exports. The steps below take eight exports by default,
-none bigger than about 800 rows (one German account with about 3,000 SKUs, 60 days). Take
-families from `parent_asin`, never from SKU text: a SKU prefix can match a different product.
+SKU-level pull of the whole catalog (thousands of rows) is too big to read there, and matching
+hundreds of rows to families inside the conversation is where mistakes creep in. So the server
+does the sums: the first answer takes about 16 small exports, most of them one reasons export
+per family in step 6, none above about 450 rows (one German account with about 3,000 SKUs, 60
+days). Take families from `parent_asin`, never from SKU text: a SKU prefix can match a
+different product.
 
 1. `sellers_and_vendors_list` -> pick the seller and note its `marketplaceCountryCode`
    (the marketplace this run covers).
@@ -225,32 +227,34 @@ families from `parent_asin`, never from SKU text: a SKU prefix can match a diffe
    it holds every product without a parent. Break it down with a second export: the same
    request with a `parent_asin` `null` filter and `groupBy [child_asin]`; each of those
    products is its own family. Per family: rate, times the store rate, flag (framework point
-   1) or "small sample", refund cost. Rank by refund cost. The families to explain are the top
-   10 plus every other flagged family. Families or products with refund cost and no returned
-   unit in the window go on the "refund without a return in this window" line (total and the
-   three largest).
-5. **Variants of those families:** `exports_create` on the profit table, same window and
-   marketplace filter, `parent_asin` `in` the parent ASINs to explain, `groupBy [parent_asin,
-   child_asin]`, `sum total_units_sold`, `sum return_units`, `sum refund_cost`, `orderByColumn`
-   the refund-cost alias `ASC` (about 550 rows for 23 families). It gives the variants count
-   (child ASINs that shipped units), the child-to-family map for step 6 and the variant lines:
+   1) or "small sample", refund cost. Rank by refund cost. The family table shows the top 10;
+   count the flagged families below them ("N more families above twice the store rate") and
+   pull their variants and reasons only when the user asks about them (steps 5 and 6 for those
+   families then). Families or products with refund cost and no returned unit in the window go
+   on the "refund without a return in this window" line (total and the three largest).
+5. **Variants of the top 10:** `exports_create` on the profit table, same window and
+   marketplace filter, `parent_asin` `in` the top 10's parent ASINs (a product without a parent
+   is its own single variant), `groupBy [parent_asin, child_asin]`, `sum total_units_sold`, `sum
+   return_units`, `sum refund_cost`, `orderByColumn` the refund-cost alias `ASC` (about 270 rows
+   for one German account's top 10). It gives the variants count (child ASINs that shipped
+   units), each family's child ASINs with at least one return for step 6, and the variant lines:
    show one only when it carries most of its family's refund cost. A child listed under two
    parents counts for the parent where it shipped more units.
-6. **Reasons per family:** `exports_create` on `amazon_returns`, `filters`
-   `marketplace_country_code` `in` the selected marketplace (this also drops the regional
-   rows) and `child_asin` `in` the step-5 children with at least one return plus the
-   no-parent products being explained, `groupBy [child_asin, amazon_return_reason,
-   amazon_fulfillment_channel, amazon_return_detailed_disposition,
-   amazon_return_label_to_be_paid_by]`, `sum quantity`, `sum amazon_return_label_cost`,
-   `orderByColumn` `child_asin`, CSV (about 800 rows for 330 child ASINs; split a longer list
-   into several exports of about 300). Map each row to its family; per family: the largest
-   actionable bucket and its share of returned units, the non-actionable share, and the share
-   not resellable (FBA units with a disposition other than `SELLABLE`). The summed units should
-   equal the same children's `return_units` from step 5 (equal to the unit on one German
-   account, 15 Nov 2026); if they differ by more than a few %, say so.
+6. **Reasons, one export per family:** for each family in the table, `exports_create` on
+   `amazon_returns`, `filters` `marketplace_country_code` `in` the selected marketplace (this
+   also drops the regional rows) and `child_asin` `in` that family's children with at least one
+   return (step 5), `groupBy [amazon_return_reason, amazon_fulfillment_channel,
+   amazon_return_detailed_disposition, amazon_return_label_to_be_paid_by]`, `sum quantity`, `sum
+   amazon_return_label_cost`, CSV `limit 500` (8 to 31 rows per family on one German account).
+   The server sums the family, so nothing is matched row by row in the conversation. The
+   products without a parent in the table share one export, with `child_asin` added to the
+   groupBy. Per family: the largest actionable bucket and its share of returned units, the
+   non-actionable share, and the share not resellable (FBA units with a disposition other than
+   `SELLABLE`). Each family's summed units should equal its `return_units` from step 4 (equal
+   to the unit on one German account, 15 Nov 2026); if they differ by more than a few %, say so.
 7. **Names:** `exports_create` on `amazon_returns`, `filters` `marketplace_country_code` `in`
    the selected marketplace and `child_asin` `in` the child with the most returns in each
-   family being explained, `groupBy [child_asin, product_name]`, `sum quantity` (one or a few
+   family of the table, `groupBy [child_asin, product_name]`, `sum quantity` (one or a few
    rows per family; a child can carry several titles, take any). Shorten each to brand,
    product and size, and translate when the user asks. A family with no return keeps its
    parent ASIN as its name.
@@ -264,8 +268,10 @@ families from `parent_asin`, never from SKU text: a SKU prefix can match a diffe
    per-return money in `amazon_returns` - the FBA money comes from the profit table's
    `refund_cost` / `return_cogs` (or settlements), never from the returns table.
 9. **Comments for the flagged families:** by default the top five flagged families by refund
-   cost whose largest bucket is actionable; say how many more are flagged and offer to read
-   them, and read them all when the user asks. `exports_create` on `amazon_returns` for the
+   cost whose largest bucket is actionable, taken from the table first; if fewer than five
+   qualify there, run steps 5 and 6 for the next flagged families by refund cost until five do
+   or none is left. Say how many more are flagged and offer to read them, and read them all
+   when the user asks. `exports_create` on `amazon_returns` for the
    same window, `filters` `marketplace_country_code` `in` the selected marketplace,
    `child_asin` `in` those families' children with returns, `fba_customer_comments`
    `notNull` and `fba_customer_comments` `!=` an empty string (blank comments are empty
