@@ -141,7 +141,7 @@ Check in this order; the first that fits wins.
 
 Notes that go next to the cause:
 
-- **Buy Box low all along.** Under 90% in both windows without the 10-point drop is a
+- **Buy Box low all along.** Under 90% in both windows without the 5-point drop is a
   standing problem, not the cause of this drop. Say so and go on to the next check.
 - **Average price paid** is sales divided by units, so it also moves when the mix of
   SKUs under one ASIN changes. Say "average price paid rose" and ask the user to check

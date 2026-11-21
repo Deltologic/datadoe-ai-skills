@@ -78,7 +78,7 @@ Per query, compute:
 - **Impressions per search** = `child_asin_impression_count` / `search_query_volume`:
   how often the product is shown. About 1 means once in every search. Impression share
   is small by nature - a search shows 20 to 30 products, so a product shown once in
-  every search holds about 3% to 6% of the impressions. Never call a share low from its
+  every search holds about 3% to 5% of the impressions. Never call a share low from its
   size; use impressions per search to judge exposure.
 - **Your CTR** = `child_asin_click_count` / `child_asin_impression_count`, and the
   **market CTR** = `search_query_total_click_count` / `search_query_total_impression_count`.
