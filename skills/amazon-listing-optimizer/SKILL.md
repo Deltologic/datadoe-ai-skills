@@ -156,14 +156,20 @@ fix.
 ### The single highest-leverage move: does your title say what converts?
 
 Before rewriting anything, run this once - the most common, highest-ROI miss:
-1. **Cluster** the queries into themes.
+1. **Cluster** the queries into themes: one theme per word shoppers add to the product
+   noun (audience, material, size, use, problem, season). Size numbers form one theme;
+   competitor brands form their own group, which is never a theme to add.
 2. Per theme, sum volume and take the **CVR** and **CTR-vs-market**.
 3. Find the theme with the **best conversion and real volume** - what buyers actually
    want from this product. The title carries the theme with the most clicks; a smaller
    theme that converts better belongs in a bullet.
-4. **Check whether that theme's words are in the title.** If your best-converting theme
-   is missing, that is the #1 fix - and since the title now holds only 75 characters,
-   it must earn its place with the single best-converting theme, not a keyword pile.
+4. **Check whether that theme's words are in the title.** A word counts as there as a
+   word, a word form, or part of a compound (in German, "Sohlen" is in
+   "Einlegesohlen"); do not change a compliant title only to spell such a word on its
+   own, and put it in the backend terms if it is not already covered. If your
+   best-converting theme is missing, that is the #1 fix - and since the title now holds
+   only 75 characters, it must earn its place with the single best-converting theme,
+   not a keyword pile.
 
 ### Intent-coverage audit (how COSMO reads the listing)
 
@@ -351,7 +357,7 @@ review text: ask the user to paste a few, or skip this and say so.
      shows whether another of your products took the place (your products together
      fell by less than 10%, or rose). For the ads line, one export on
      `amazon_ads_performance_by_child_asin_and_date` for the ASIN, by week, with
-     `sum(ad_clicks)`. If the Search Query Performance & Share Tracker already ran in
+     `sum(ad_clicks)` as `clicks_from_ads` (an alias must differ from the column name). If the Search Query Performance & Share Tracker already ran in
      this chat, reuse its offer and own-products results instead of exporting them
      again. Put the result in the first lines of the answer.
      When the click rate fell while searches held, add one export on
@@ -372,8 +378,9 @@ review text: ask the user to paste a few, or skip this and say so.
    Rufus questions above; note which are missing.
 8. **Harvest + competitive gap:** pull converting ad terms from
    `amazon_ads_search_terms_by_campaign_by_date`: `groupBy: ["ad_search_term"]`, `sum`
-   of `ad_clicks`, `ad_orders` and `ad_impressions`, a `having` on `ad_orders`, the
-   product's theme word in a `contains` filter on `ad_search_term`, `limit: 40`. The
+   of `ad_clicks`, `ad_orders` and `ad_impressions` as `clicks`, `orders` and
+   `impressions`, `having` `orders >= 2`, the product noun of the main query in a
+   `contains` filter on `ad_search_term`, `limit: 40`. The
    table has no ASIN column, so say that the harvest covers every product the theme
    word matches. For the competitive gap reuse the Brand Analytics export from step 4c
    (or pull it now for the main queries): your product is in the gap when it is not in
@@ -523,6 +530,7 @@ attributes_to_fill:
   {audience=..., intended_use=..., occasion=..., material=...}
 
 FIX FIRST (by impact, measurable)
+  0) {only when shoppers moved to another kind of product that you sell: put {your product} in front of that query (ads) - this comes before any copy change}
   1) {title: add best-converting theme / bring under 75 chars (headline)}
   2) {below-market CTR on "Y" -> new main image + title hook}
   3) {exposure: you win "Z" but see {s}% -> investigate ads / offer / stock / keyword coverage}

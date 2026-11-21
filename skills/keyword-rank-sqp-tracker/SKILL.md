@@ -119,7 +119,8 @@ over the pair's weeks, divided by the weeks it has; for a product, add up its pa
 
 A stage is **down** when its share fell by 20% or more of its earlier value and the
 earlier window holds at least this much at that stage: 500 impressions, 20 clicks, 10
-purchases. Judge a pair on its own counts and a product on its summed counts. **Up**
+purchases (the product's own counts, not the query's). Judge a pair on its own counts
+and a product on its summed counts. **Up**
 mirrors it; anything between is **held**. Under the floor the answer is "too few to
 call" - a watch item, never a loss.
 
@@ -150,7 +151,8 @@ Notes that go next to the cause:
   also lost 10% or more at a later stage on those queries, say that too.
 - **Partly a swap.** If your products together fell by 10% or more but one other
   product of yours gained at least half of what the flagged product lost at that stage
-  on the same query, keep the cause and add: "{product} gained {n} of the {m}".
+  on the same query (in counts: clicks, impressions or purchases), keep the cause and
+  add: "{product} gained {n} of the {m}".
 - When the product that gained has the same `parent_asin`, call it another variation
   of the same listing.
 - Prices are in the marketplace currency (`sellers_and_vendors_list`).
@@ -233,8 +235,11 @@ and never pulls raw rows: the server ranks the products, and the detail is pulle
    have missed a product.
 4. **Money keywords.** One export over both windows together, filtered with
    `child_asin` `in` the 10 products, `groupBy: ["child_asin", "search_query"]`,
-   `sum(child_asin_purchase_count)` as `purchases`, `having` `purchases >= 5`, ordered
-   by `purchases` descending, `limit: 100`. Keep at most the 8 strongest per product.
+   `sum(child_asin_purchase_count)` as `purchases` and `sum(search_query_volume)` as
+   `searches`, `having` `purchases >= 5`, ordered by `purchases` descending,
+   `limit: 100`. Keep at most the 8 strongest per product; on a tie, the one with more
+   searches. With a tie at 10th place in step 3, "the 10 products" in steps 4 to 9 means
+   all the products kept.
 5. **Before and after.** Two exports, one per window, `groupBy: ["child_asin",
    "search_query"]`, filtered with `child_asin` `in` the 10 products and `search_query`
    `in` the queries kept in step 4. Aggregations: `sum` of
@@ -264,11 +269,13 @@ and never pulls raw rows: the server ranks the products, and the detail is pulle
      a query and week). Sum the weeks of each window, then divide. For each flagged
      product, add up its own queries and compare the windows.
    - For each of those products (at most 5), one export filtered to its query with the
-     largest fall, over both windows, `groupBy: ["date", "child_asin"]`, `sum` of the
-     three counts. Divide each product's counts by that query's window totals from the
+     largest fall in counts at that stage (the most impressions, clicks or purchases
+     lost, not the largest percentage), over both windows, `groupBy: ["date",
+     "child_asin"]`, `sum` of the three counts. Products that share that query share
+     one export. Divide each product's counts by that query's window totals from the
      first export: the product that gained is the one whose share at that stage rose
-     the most (counts fall for everyone when searches fall). This export also decides
-     "partly a swap".
+     the most in percentage points (counts fall for everyone when searches fall). This
+     export also decides "partly a swap".
 9. **Names.** One export on `amazon_products_by_child_asin` for the 10 products and
    any product that gained in step 8, filtered to the marketplace: `child_asin`,
    `product_name`, `parent_asin`. Shorten long titles to brand, product and size.
@@ -359,7 +366,7 @@ Listing Optimizer. Without the cause checks all six would have read as lost keyw
 - Did I apply the floors (500 impressions, 20 clicks, 10 purchases) before calling a
   stage down?
 - Did every one of the 10 products get the offer check, and every product with a
-  stage down the swap check, before I called it a loss?
+  stage down that the offer did not explain the swap check, before I called it a loss?
 - Did I look at click share and purchase share, not only impression share?
 - Did I avoid calling an impression share "low" because of its size?
 - Is every SQP export grouped and small (the screen about 100 rows, the rest under about 150)?
