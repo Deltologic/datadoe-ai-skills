@@ -1,13 +1,16 @@
 ---
 name: keyword-rank-sqp-tracker
 description: >-
-  Track your money keywords week over week using your share of each query
-  (impressions, clicks, purchases), and flag the terms slipping,
-  lost, rising or emerging before the sales drop shows up. Watches only the keywords
-  you convert on, so the alert list is short. Degrades to a baseline on young accounts
-  with little history. Live from DataDoe weekly Search Query Performance, read-only.
-  Use for "keyword rank", "am I ranking", "search visibility", "rank tracker", "did my
-  rank drop", "SQP", "search query performance", "losing rank", or "keyword trends".
+  Find where you are losing search share on the keywords you sell on - for the whole
+  store or for one product - week over week, from your share of each query's
+  impressions, clicks and purchases. Before it raises an alarm it checks the cause:
+  fewer searches, a swap between your own products, stock / Buy Box / price, or a real
+  loss at the impression, click or purchase stage. Watches only the keywords you
+  convert on, so the list is short. Degrades to a baseline on young accounts with
+  little history. Live from DataDoe weekly Search Query Performance, read-only. Use for
+  "keyword rank", "am I ranking", "search visibility", "rank tracker", "did my rank
+  drop", "SQP", "search query performance", "losing rank", "losing share", or "keyword
+  trends".
 metadata:
   title: Search Query Performance & Share Tracker
   author: DataDoe
@@ -20,193 +23,381 @@ metadata:
 
 # Search query performance and share tracker
 
-Tracks how your important search queries move week over week using your **share of
-the query** (impressions, clicks, purchases), and flags
-the money keywords that are slipping before the sales drop shows up in your revenue. It
-watches the terms you actually convert on, not every query, so the alert list is short
-and worth acting on. Live from DataDoe's weekly Search Query Performance, read-only.
+Tracks your **share of the search queries you sell on**, week over week, for the whole
+store or for one product. For every drop it says which stage moved (shown, clicked,
+bought) and checks the cause before it calls the drop a loss: many "lost keywords" are
+fewer searches, a swap between two of your own products, or a stock or Buy Box problem.
+It watches the queries you actually convert on, so the list is short. Live from
+DataDoe's weekly Search Query Performance (SQP), read-only.
 
 ## When to use this
 
-- Weekly SEO/visibility check: "am I losing ground on the keywords that matter?"
-- Sales dipped on an ASIN and you want to check search-share changes; SQP does not
-  measure organic search position.
+- Weekly visibility check: "where am I losing ground on the keywords that matter?"
+- Sales dipped on a product and you want to know whether search share moved.
 - After a listing edit, launch, or ad change, to watch the keywords respond.
-- To spot a growing, relevant query where your share is low.
+- Before a listing rewrite, to check that the listing is the cause.
 - Trigger phrases: "keyword rank", "am I ranking", "search visibility", "rank
   tracker", "did my rank drop", "SQP", "search query performance", "losing rank",
-  "keyword trends".
+  "losing share", "keyword trends".
 
-## The framework. Watch the money keywords, flag the slips
+## The framework. Share by stage, cause before alarm
 
-Use **share of the query** - the slice of a query's impressions/clicks/purchases you
-capture - to track visibility and funnel performance. Amazon's **Search Query Score**
-ranks queries relative to other queries for the same ASIN based on overall query
-performance; 1 is highest. It does not measure the ASIN's organic search position.
-Keep the score as per-period context; do not use its movement to trigger share alerts.
+### 1. What a share is, and how to read it
 
-**Check history depth first (a tracker needs periods to compare).** SQP data lags the
-present and only accumulates from the day the account connected, so a young or
-recently-connected account may have very few periods:
-- **>= 4 weekly periods** -> full trend mode (below).
-- **< 4 weekly periods** -> pull the monthly SQP source as a longer-cadence fallback.
-- **< 2 comparable periods either way** -> **baseline mode**: don't invent a trend.
-  Report the current share and query score per money keyword as a baseline and state
-  plainly: "trend needs >= 4 periods; only N available - re-run weekly as history builds."
-Never fabricate a trend from a single period.
+For one product on one query, a share is the product's count divided by the query's
+total count:
 
-When you do have the periods, track shares weekly:
+- **Impression share** = `child_asin_impression_count` / `search_query_total_impression_count`
+- **Click share** = `child_asin_click_count` / `search_query_total_click_count`
+- **Purchase share** = `child_asin_purchase_count` / `search_query_total_purchase_count`
 
-1. **Pick the money keywords** - don't track everything. A query matters when it has
-   real volume AND the ASIN actually converts on it (purchases over the window, or a
-   meaningful click/purchase share). Rank the watch-list by volume x your purchase share.
-2. **Build the weekly series** per money keyword: Search Query Score for each ASIN
-   and period, impression share
-   (`child_asin_impression_count` / `search_query_total_impression_count`), click share,
-   and purchase share, one point per week.
-3. **Classify the movement** over the recent weeks (compare the latest 2-3 weeks to the
-   prior 2-3, not week-to-week noise):
-   - **Slipping** - impression share trending down on a money keyword; investigate
-     the loss of share on a term that converts.
-   - **Lost** - impression share collapsed to near zero with sufficient query volume.
-     Check suppression, stock-out, buy-box and ads before assigning a cause; a missing
-     query row or null score alone does not establish lost visibility.
-   - **Rising** - share improving. Protect and scale (ads + keep the copy).
-   - **Stable** - within normal wobble; ignore.
-   - **Emerging** - a query whose total volume is growing where your share is low ->
-     keyword coverage/ads opportunity to investigate.
-4. **Tie each flag to a lever**: slipping/lost money keyword -> check the listing
-   (is the term still in title/backend?), ads support, stock and buy-box; rising
-   -> scale; emerging -> check keyword coverage + test ads.
+Sum the counts over a window first, then divide. Report a zero denominator as
+unavailable.
+
+**Impression share is small by nature.** One search shows many products. On one German
+account (November 2026) a search produced 23 to 32 product impressions, and a product
+shown about once in every search held 3.5% to 6% of them. So never call a share "low"
+from its size. Compare the product with itself over time, and to say how often it is
+shown use **impressions per search** = `child_asin_impression_count` /
+`search_query_volume` (about 1 means once in every search).
+
+Amazon's **Search Query Score** ranks queries against other queries for the same
+product; 1 is highest. It is not the product's position in search results. Show it as
+context per week; never use it to trigger an alert, and never take a minimum, sum or
+average across weeks or products. SQP counts mix organic and sponsored results, and a
+purchase is counted only when it follows a search on that query, so SQP purchases are
+far below units sold.
+
+### 2. Weeks and windows
+
+- An SQP week runs Sunday to Saturday; `date` is the Sunday. Amazon publishes a week
+  after Monday 12:00 UTC, so the newest week in the table is the latest complete week.
+- Use the **unbroken run of weeks that ends at the newest week**. A missing week ends
+  the run; weeks before the gap are not used. If the user asked for more weeks than the
+  run holds, say how many there are in the first line of the answer.
+- Compare two windows of equal length that touch each other:
+
+  | Weeks in the run | "After" window | "Before" window |
+  |---|---|---|
+  | 8 or more | latest 4 weeks | the 4 weeks before them |
+  | 6 or 7 | latest 3 weeks | the 3 weeks before them |
+  | 4 or 5 | latest 2 weeks | the 2 weeks before them |
+
+  Name the weeks of both windows in the answer. A week of the run that falls outside
+  both windows is not used in the store view.
+- Fewer than 4 weeks: pull the monthly source and compare the latest month with the one
+  before. Fewer than 2 comparable periods either way: **baseline mode** - report the
+  current shares and say "a trend needs at least 4 weeks; only N available". Never
+  build a trend from one period.
+
+### 3. Products first, then their money keywords
+
+- **Screen products on the server.** Rank products by the purchases they lost between
+  the windows, counted over all their tracked queries, and look closer at the 10 with
+  the largest loss (at least 5 purchases lost). On a tie at 10th place keep every tied
+  product and say so.
+- A **money keyword** is a query on which one of those products has at least 5
+  purchases in the two windows together. Keep at most the 8 strongest per product (on
+  a tie, the one with more searches). Choose keywords on both windows together:
+  choosing on the earlier window alone makes every keyword look as if it fell.
+- Leave out **head terms**: pairs where the product holds under 0.5% of the query's
+  impressions in both windows. A few purchases on a huge generic query say nothing
+  about share, and their totals swamp every sum.
+- A pair is **comparable** when it has a row in at least 2 weeks of each window.
+  Amazon's report holds at most 100 queries per product and week, so a missing row
+  means "not in that week's list", not zero. Leave pairs that are not comparable out
+  and count them.
+- A product with no money keyword sells on many small queries. Do not judge its
+  shares; it still gets the offer check, and without an offer cause it gets "no clear
+  cause - spread over small queries".
+
+### 4. Three stages, with floors
+
+For every comparable pair, and for every product (its comparable pairs summed), work
+out the three shares in each window. Searches per week = `search_query_volume` summed
+over the pair's weeks, divided by the weeks it has; for a product, add up its pairs.
+
+A stage is **down** when its share fell by 20% or more of its earlier value and the
+earlier window holds at least this much at that stage: 500 impressions, 20 clicks, 10
+purchases. Judge a pair on its own counts and a product on its summed counts. **Up**
+mirrors it; anything between is **held**. Under the floor the answer is "too few to
+call" - a watch item, never a loss.
+
+### 5. Cause before alarm
+
+Give each of the 10 products one cause, judged on the product's summed stages
+(framework 4); a single keyword whose stage fell is shown as detail, not as the cause.
+Check in this order; the first that fits wins.
+
+| # | Cause | How to tell | What it means |
+|---|---|---|---|
+| 1 | **Offer** | In an "after" week no units were sold; or the Buy Box average of an "after" week is under 90% and at least 5 points under the "before" average; or the average price paid rose by 5% or more while units fell | Stock, Buy Box or price. Fix the offer; the listing is not the cause |
+| 2 | **Swap between your own products** | A stage is down, and at the earliest stage that fell (impressions before clicks before purchases) all your tracked products together fell by less than 10%, or rose, on the same queries | Another of your products took the place. Decide which should lead |
+| 3 | **Shown less** | Impression share is down | Check that the query's words are in the title, bullets and backend terms, and whether ads still run on it |
+| 4 | **Clicked less** | Impression share held, click share is down | What shoppers see in the results: main image, title, price, rating, badge |
+| 5 | **Bought less** | Click share held, purchase share is down | The product page: price, reviews, bullets, images, delivery promise |
+| 6 | **Fewer searches** | No stage is down and searches per week are down 15% or more | Demand or season. Nothing to fix |
+| 7 | **No clear cause** | None of the above fits, every move sits under the floors, or the product has no money keyword | A small or mixed move. Watch |
+
+Notes that go next to the cause:
+
+- **Buy Box low all along.** Under 90% in both windows without the 10-point drop is a
+  standing problem, not the cause of this drop. Say so and go on to the next check.
+- **Average price paid** is sales divided by units, so it also moves when the mix of
+  SKUs under one ASIN changes. Say "average price paid rose" and ask the user to check
+  the price.
+- **A swap explains the place, not always the whole drop.** If your products together
+  also lost 10% or more at a later stage on those queries, say that too.
+- **Partly a swap.** If your products together fell by 10% or more but one other
+  product of yours gained at least half of what the flagged product lost at that stage
+  on the same query, keep the cause and add: "{product} gained {n} of the {m}".
+- When the product that gained has the same `parent_asin`, call it another variation
+  of the same listing.
+- Prices are in the marketplace currency (`sellers_and_vendors_list`).
+
+Causes 3 to 5 are real losses of share. Causes 4 and 5, and cause 3 when the query's
+words are missing from the listing, are the cases to check with the Listing Optimizer:
+it decides whether the copy is the cause, or the season, the ads, or a different kind
+of product shoppers now click. Causes 1, 2 and 6 are not listing problems: say so
+plainly.
+
+### 6. Ranking and the listing case
+
+Show the 10 products ranked by purchases lost, each with its cause. Then name the
+biggest real loss of share (causes 3 to 5): the one with the largest count at the
+stage that fell. That stage must clear its floor; say how many clicks or purchases the
+case rests on, and when it is small, say so. Call it "the case to check with the
+Listing Optimizer", not a listing problem: this skill does not read the listing, the
+season or the ads. If no product has cause 3 to 5, say that none of the drops is a
+listing problem.
 
 ## Configuration
 
 - MCP base: `https://mcp.datadoe.com/mcp/v1`
-- Data source (resolve by table name with `exports_sources_get`):
-  - `amazon_child_product_organic_search_ranks_per_week` (weekly SQP) - per query per
-    week: `date` (week start; use several weeks for a trend), `search_query`,
-    `search_query_volume`, `search_query_total_impression_count`,
-    `child_asin_impression_count`, `child_asin_click_count`, `child_asin_purchase_count`,
-    `child_asin_search_query_score` (Amazon Search Query Score; 1 = highest query
-    performance), and the
-    `search_query_total_click_count` / `_purchase_count` for share math.
-- Inputs: the target ASIN(s) (+ marketplace if multi). Optionally a specific
-  watch-list of keywords; otherwise the skill derives the money-keyword list itself.
-- Use `child_asin_search_query_score`. `child_asin_organic_search_rank` is a deprecated
-  compatibility name for the same data and should not be used in new exports.
-- Table names and this skill's identifier remain unchanged for compatibility. Neither
-  the weekly nor monthly SQP source provides organic search position or separates
-  organic and sponsored visibility.
-- Keep scores per ASIN, marketplace and period. Do not take a minimum, sum or average
-  across weeks or ASINs, or infer indexing or organic position from them.
+- Data sources. Resolve each with `exports_sources_get`, passing the table name as
+  `query` and `pageSize: 1` (the default page prints several long descriptions):
+  - `amazon_child_product_organic_search_ranks_per_week` (weekly SQP), one row per
+    product, query and week: `date`, `child_asin`, `search_query`,
+    `search_query_volume`, `child_asin_impression_count`, `child_asin_click_count`,
+    `child_asin_purchase_count`, `child_asin_search_query_score`, and the query totals
+    `search_query_total_impression_count`, `search_query_total_click_count`,
+    `search_query_total_purchase_count`. The totals and the volume repeat on every
+    product row of the same query and week: sum them only inside one product-and-query
+    pair across weeks, or take `max` per week.
+  - `amazon_child_product_organic_search_ranks_per_month` - the same columns per month,
+    for accounts with under 4 weeks.
+  - `amazon_profit_by_sku_and_date` - the offer check: `total_units_sold`,
+    `total_sales`, `avg_buybox_percentage` by `child_asin` and week. Premium table: an
+    export costs 5 AI Tokens instead of 2, nothing else differs. Its Buy Box and
+    traffic columns can lag by more than a week: an empty Buy Box next to units sold
+    means "not published yet", not a lost Buy Box.
+  - `amazon_products_by_child_asin` - `product_name` and `parent_asin`. It has a row
+    per marketplace: filter `marketplace_country_code` (rows use `GB` for the United
+    Kingdom).
+- Inputs: none for the store view; one or more ASINs for the product view; optionally
+  the user's own keyword list.
+- A DataDoe seller id is one marketplace, so SQP exports need no marketplace filter.
+- SQP exists only for the ASINs on the seller's SQP list (up to 252). If the weekly
+  probe returns nothing, say that the list is empty or that Amazon has not delivered
+  yet.
+- **Keep every SQP export grouped and small.** A grouped export returns only the
+  columns you ask for; raw SQP rows add about 230 characters of account columns each
+  (350 raw rows came to 83,000 characters). With the steps below the product screen
+  returns up to 100 short rows and no other export passes about 150 rows. An `in` value is a comma-separated list: leave out a query that
+  contains a comma and say so.
+- When a keyword export returns exactly `limit` rows, the cut falls inside a tie and
+  is arbitrary: drop the rows at the smallest value on the list.
+- `child_asin_organic_search_rank` is a deprecated name for the Search Query Score; do
+  not use it.
 
 ## Step-by-step workflow (MCP-native)
 
-1. `sellers_and_vendors_list` -> pick the seller; get the target ASIN(s).
-2. `exports_sources_get` -> confirm the weekly SQP source is `enabled`. **Then check
-   history depth**: count the distinct `date` (week) values available for the ASIN. If
-   fewer than 4 weeks, also pull the monthly SQP source
-   (`amazon_child_product_organic_search_ranks_per_month`) for a longer view; if still
-   under 2 comparable periods, run **baseline mode** (report current share and query
-   score + the "not enough history yet" notice) and stop there.
-3. **Pull the weekly series:** `exports_create` on the weekly SQP source filtered to the
-   ASIN(s) over a multi-week window (>= 8 weeks so a trend is visible), columns
-   `child_asin, date, search_query, search_query_volume, search_query_total_impression_count,
-   child_asin_impression_count, child_asin_click_count, child_asin_purchase_count,
-   search_query_total_click_count, search_query_total_purchase_count,
-   child_asin_search_query_score`. (Do not aggregate away `date` - you need the
-   weekly points.) **Always include `child_asin`** - without it the rows of different ASINs
-   interleave under the same query and date. SQP returns exactly 100 queries per ASIN-week,
-   so 8 weeks x 1 ASIN is ~800 rows (fits the 1,000-row JSON cap) and 3 ASINs is ~2,400:
-   run one export per ASIN, or use CSV output (5,000-row cap). If `rowCount == limit`, the
-   newest weeks may be missing - paginate with `skip` before analysing.
-4. **Build the money-keyword watch-list:** aggregate counts to per-query totals within
-   each ASIN and marketplace, keep queries with real volume and non-trivial purchase share, rank by volume x purchase share.
-5. **Per money keyword, compute the weekly series** (query score context, impression
-   share, click share, purchase share) and the recent-vs-prior trend. Calculate shares
-   from summed counts for each comparison window; report a zero denominator as unavailable.
-6. **Classify** each as slipping / lost / rising / stable / emerging using the trend,
-   and attach the lever; **report** the slips first (money at stake), then losses,
-   risers and emerging - a short, ranked alert list, not a data dump.
+Use the **store view** when the user names no product. It takes about 10 small exports
+and never pulls raw rows: the server ranks the products, and the detail is pulled for
+10 of them only.
+
+1. `sellers_and_vendors_list` -> pick the seller.
+2. **Weeks probe.** Confirm the weekly SQP source is enabled. Then one export on it
+   from the Sunday 12 weeks before today to today, `groupBy: ["date"]`, with `countDistinct(child_asin)`,
+   `count(search_query)` and `sum(child_asin_purchase_count)`. Find the unbroken run
+   that ends at the newest week and set the two windows (framework 2). The weekly
+   purchase sums give the store's search purchases before and after.
+3. **Product screen.** Two exports, `groupBy: ["child_asin"]`,
+   `sum(child_asin_purchase_count)` as `purchases`:
+   - the "before" window, ordered by `purchases` descending, `limit: 100`;
+   - the "after" window, filtered with `child_asin` `in` those products.
+
+   Loss = before minus after. Take the 10 products with the most purchases lost,
+   leaving out any that lost fewer than 5. A product outside the 100 lost at most the
+   purchases of the 100th: if that is more than the 10th loss, say the screen may
+   have missed a product.
+4. **Money keywords.** One export over both windows together, filtered with
+   `child_asin` `in` the 10 products, `groupBy: ["child_asin", "search_query"]`,
+   `sum(child_asin_purchase_count)` as `purchases`, `having` `purchases >= 5`, ordered
+   by `purchases` descending, `limit: 100`. Keep at most the 8 strongest per product.
+5. **Before and after.** Two exports, one per window, `groupBy: ["child_asin",
+   "search_query"]`, filtered with `child_asin` `in` the 10 products and `search_query`
+   `in` the queries kept in step 4. Aggregations: `sum` of
+   `child_asin_impression_count`, `search_query_total_impression_count`,
+   `child_asin_click_count`, `search_query_total_click_count`,
+   `child_asin_purchase_count`, `search_query_total_purchase_count` and
+   `search_query_volume`, plus `count(search_query)` as the weeks present. Use only the
+   pairs kept in step 4 (the two filters also return other combinations); drop head
+   terms and pairs that are not comparable.
+6. **Shares and floors.** Per pair and per product, work out the three shares and the
+   searches per week for both windows and mark each stage down, up, held or too few
+   (framework 4).
+7. **Offer check.** One export on `amazon_profit_by_sku_and_date` for the 10 products
+   over both windows, `groupBy: ["date", "child_asin"]` with `dateInterval: "WEEK"`
+   (weeks start on Sunday, like SQP), `sum(total_units_sold)`, `sum(total_sales)` and
+   `avg(avg_buybox_percentage)`. Average price paid = sales / units. Do not read the
+   unfinished current week. This export can stay pending for a minute: poll
+   `exports_get` until it completes.
+8. **Your products together** (the swap check). Only for products with a stage down
+   that the offer check did not explain. Take their money keywords where the share at
+   that stage fell by 20% or more (floor or not), strongest first, at most 15 queries
+   in total.
+   - One export over both windows, filtered with `search_query` `in` those queries,
+     `groupBy: ["date", "search_query"]`, `sum` of `child_asin_impression_count`,
+     `child_asin_click_count` and `child_asin_purchase_count` (all your tracked
+     products together) and `max` of the three query totals (the same on every row of
+     a query and week). Sum the weeks of each window, then divide. For each flagged
+     product, add up its own queries and compare the windows.
+   - For each of those products (at most 5), one export filtered to its query with the
+     largest fall, over both windows, `groupBy: ["date", "child_asin"]`, `sum` of the
+     three counts. Divide each product's counts by that query's window totals from the
+     first export: the product that gained is the one whose share at that stage rose
+     the most (counts fall for everyone when searches fall). This export also decides
+     "partly a swap".
+9. **Names.** One export on `amazon_products_by_child_asin` for the 10 products and
+   any product that gained in step 8, filtered to the marketplace: `child_asin`,
+   `product_name`, `parent_asin`. Shorten long titles to brand, product and size.
+   Translate names and queries only when the user asks: put the English next to each
+   query and name where it appears.
+10. **Assign causes and report** (framework 5 and 6).
+
+**Product view** (the user names one or a few ASINs): skip step 3 and run steps 4 to
+10 for those ASINs. Add one export for the week-by-week lines of the queries that
+moved: `groupBy: ["date", "search_query"]`, filtered to the ASIN and at most 10
+queries, the same sums plus `max(child_asin_search_query_score)`.
+
+**Emerging queries** (growing searches where the product is barely shown) only when
+the user asks: in the product view, compare searches per week between the windows for
+queries where the product has impressions and at most 1 purchase.
+
+When the user asks for a dashboard, show the same content in the same order: the
+header, the product table, then the two short lists.
 
 ## Output format
 
-Always state: "Search Query Score ranks queries for the same ASIN; it is not organic
-search position. SQP shares do not isolate organic visibility."
+Start with the weeks used. State once: "Search Query Score ranks queries for the same
+product; it is not a position in search results. SQP mixes organic and sponsored
+results."
 
 ```
-Search Query Performance & Share Tracker - {ASIN} - {marketplace} - last {N} weeks
+Search Query Performance & Share Tracker - {store} - {marketplace}
+Before = weeks of {dates}, after = weeks of {dates}{; "you asked for M weeks, the data holds N in a row"}.
+Store: {b} -> {a} purchases after a search ({+/-x}%). Looked closer at the 10 products that lost the most.
 
-SLIPPING (money keywords losing ground - act first)
-  query              vol    impr-share (wk-3 -> now)   query score (context)   your CVR   lever
-  {kw}               {v}    12% -> 6%                   1 -> 1                 {cv}%      term still in title? add ads
-  {kw}               {v}    9%  -> 5%                    5 -> 5                 {cv}%      check stock / buy-box
-
-LOST (visibility collapsed - urgent)
-  {kw}   impr-share ~0 with sufficient query volume  -> check suppression, stock-out, competitor
-
-RISING (protect + scale)
-  {kw}   4% -> 9% impr-share
-
-EMERGING (growing query, low share - check relevance and coverage)
-  {kw}   query volume +{x}%, your share {s}% -> add to backend/title, test ads
-
-Stable: {count} money keywords holding.
-```
-
-Baseline mode (young account - not enough history for a trend):
-
-```
-Search Query Performance & Share Tracker - {ASIN} - {marketplace} - BASELINE ({N} period(s) only)
-
-Not enough SQP history for a trend yet ({N} period(s); need >= 4 weeks). Current baseline:
-  query              vol    impr-share   your CVR   query score
-  {kw}               {v}    {s}%         {cv}%      {score}
+PRODUCTS BY PURCHASES LOST (all their tracked queries)
+  product             purchases     on its {n} money keywords: purchases / impr share / click share / purchase share   searches/wk   cause
+  {name} ({asin})     {b} -> {a}    {b} -> {a} / {b}% -> {a}% / {b}% -> {a}% / {b}% -> {a}%                             {b} -> {a}    {cause}
   ...
-Re-run weekly - the tracker turns on trend/slip detection once >= 4 weeks accumulate.
+
+REAL LOSSES OF SHARE (shown less / clicked less / bought less)
+  {name}: {stage} on "{query}" {b}% -> {a}% ({count b} -> {count a}); Buy Box {x}%, price steady -> {lever}
+  [or: "None. Every drop above is fewer searches, a swap between your products, or the offer."]
+
+NOT A LISTING PROBLEM
+  {name}: offer - Buy Box {x}% in the week of {date} / no units since {date}
+  {name}: swap - "{query}" went to your {other product}; your products together {b}% -> {a}%
+  {name}: fewer searches - "{query}" {b} -> {a} searches a week, shares held
+
+Left out: {count} head terms, {count} pairs not comparable. Notes: {Buy Box low all along, cuts at a limit}.
+Next: {one action per real loss; for the case to check: "run the Listing Optimizer on {asin}"}
+```
+
+Product view: the same header, then one line per money keyword with the three shares
+before and after, searches per week, the cause, and the week-by-week impression share
+for the queries that moved.
+
+Baseline mode (not enough history for a trend):
+
+```
+Search Query Performance & Share Tracker - {asin or store} - {marketplace} - BASELINE ({N} period(s) only)
+
+A trend needs at least 4 weeks; only {N} available. Current shares:
+  query              searches/wk   impr share   click share   purchase share   query score
+  {kw}               {v}           {s}%         {s}%          {s}%             {score}
+Re-run weekly - the comparison turns on once 4 weeks are in.
 ```
 
 ## Worked example (illustrative)
 
-Tracking eight weeks for an ASIN, most money keywords hold, but one high-volume term
-the ASIN converts well on drops from ~12% impression share to ~6% -> flagged
-**slipping**, top of the list, with the lever "confirm the term is still in the title/backend and add ad support." A second term
-falls to near-zero share -> **lost**, urgent, routed to check suppression/stock. A third
-climbs -> **rising**, protect and scale. A newly growing query where the ASIN barely
-shows -> **emerging**, check relevance and keyword coverage. The output is a five-line
-alert list, ordered by what costs money, not a spreadsheet of every keyword.
+A store with about 250 tracked products and seven weeks of data, so three weeks
+against three. Search purchases for the store rose. The product that lost the most is
+the best seller: every share held, but searches for its queries fell by a quarter ->
+**fewer searches**, nothing to fix. The product with the sharpest fall in impression
+share (2.6% to 0.3% on the main query) turns out to be a **swap**: another pack size
+under the same parent took the place, and the seller's products together went from 15%
+to 17% of that query's impressions. A third product sold no units in the newest week
+-> **offer**, out of stock. A fourth lost clicks in the one week its Buy Box fell to
+61% -> **offer**. A fifth lost purchase share with a Buy Box that was low all along:
+the purchases went to another of the seller's products -> **swap**, with a note to fix
+the Buy Box. One product is left with the Buy Box at 100%, a steady price, the same
+impressions and half the clicks -> **clicked less**, the one case to hand to the
+Listing Optimizer. Without the cause checks all six would have read as lost keywords.
 
 ## Quality self-check
 
-- Did I keep scores and share series separate for each ASIN and marketplace?
-- Did I track only money keywords (volume x purchase share), not every query?
-- Did I use shares for alerts and label Search Query Score as relative query performance?
-- Did I compare recent weeks to prior weeks (trend), not react to one week of wobble?
-- Did I pull enough weeks (>= 8) for a real trend?
-- Did I route each slip/loss to a concrete lever (title/backend, ads, stock/buy-box)?
-- Did I keep it per marketplace (a term can slip in one and hold in another)?
+- Did I state the weeks of both windows, and say so when the user asked for more than
+  exist?
+- Are the two windows the same length, touching, and inside one unbroken run?
+- Did I choose the products on both windows together, and drop head terms?
+- Did I leave out pairs with fewer than 2 weeks in a window instead of reading a
+  missing row as zero?
+- Did I apply the floors (500 impressions, 20 clicks, 10 purchases) before calling a
+  stage down?
+- Did every one of the 10 products get the offer check, and every product with a
+  stage down the swap check, before I called it a loss?
+- Did I look at click share and purchase share, not only impression share?
+- Did I avoid calling an impression share "low" because of its size?
+- Is every SQP export grouped and small (the screen about 100 rows, the rest under about 150)?
+- Did I say how many clicks or purchases the listing case rests on?
+- Did I keep Search Query Score as context only?
 
 ## Common mistakes
 
-- Tracking every keyword - the alert list must be short (money keywords only).
-- Reacting to single-week noise instead of a multi-week trend.
-- Treating Search Query Score as organic position, indexing proof, or an alert trigger.
-- Combining scores across ASINs or periods into a "best rank".
-- Omitting `child_asin` from a multi-ASIN export, or letting a 1,000-row JSON export
-  silently drop the latest weeks.
-- Treating a missing query row as zero share without checking export completeness.
-- Flagging a "slip" that is really a stock-out or lost buy-box (traffic falls too) -
-  check those before blaming SEO.
-- Too short a window - you can't see a trend in two weeks of weekly data.
-- Chasing an emerging query the ASIN has no real relevance to.
-- Inventing a trend from one or two periods on a young account - run baseline mode and
-  say so; the trend turns on as weeks accumulate.
+- Calling a product "lost" when another of your own products took its place.
+- Blaming search for a product that was out of stock or lost the Buy Box.
+- Calling a Buy Box that was low all along the cause of a new drop.
+- Reading a season as a loss: purchases fall with searches while every share holds.
+- Alerting on impression share only. A product can be shown as often and clicked half
+  as often.
+- Reading a 4% impression share as "rarely shown". It is about once in every search.
+- Choosing products or keywords on the earlier window only, then finding that they
+  all fell.
+- Summing a product's shares over a huge generic query where it barely appears.
+- Treating a missing row as zero share.
+- Pulling raw weekly rows, or every keyword of the store. They do not fit a chat.
+- Calling a move on 3 or 4 purchases.
+- Treating Search Query Score as a position in search, or averaging it.
+- Inventing a trend from one or two periods on a young account.
 
 ## Notes
 
-- Read-only (analysis). Fixing a slip (adding a term to the listing) is a separate
-  write skill via `AMAZON_LISTINGS_UPDATE` (dryRun-gated); adding ad support is the
-  bid/keyword write skills.
-- Pairs with the listing optimizer (one-time funnel audit) - this is the ongoing
-  week-over-week watch on the same SQP data.
+- Read-only (analysis). Changing the listing is a separate write skill via
+  `AMAZON_LISTINGS_UPDATE` (dryRun-gated); ad changes are the bid and keyword write
+  skills.
+- Pairs with the Amazon Listing Optimizer: this skill finds the product where the
+  listing is the likely cause, that one audits the listing.
+- Ads are not checked here. For a product that is shown less, look at its ad activity
+  before changing the listing.
+- The store view judges the 10 products that lost the most purchases. A product that
+  lost share while its purchases held is not on that list: use the product view for
+  it.
+- The thresholds (5 purchases, 0.5% head-term line, 20% move, the three floors, 90% Buy
+  Box) come from tests on one German account with about 250 tracked products in
+  November 2026. Say which thresholds you used when the user asks how a product was
+  judged.
 - A DataDoe skill, built on DataDoe weekly Search Query Performance data.
