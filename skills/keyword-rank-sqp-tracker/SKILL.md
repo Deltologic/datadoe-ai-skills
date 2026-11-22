@@ -165,7 +165,9 @@ plainly.
 
 ### 6. Ranking and the listing case
 
-Show the 10 products ranked by purchases lost, each with its cause. Then name the
+Show the 10 products ranked by purchases lost, each with its cause. Number the rows
+1, 2, 3 and so on without repeating a number; mark tied products with "(tie)" next to
+their loss, so a tie at 10th place reads 10 and 11, both "(tie)". Then name the
 biggest real loss of share (causes 3 to 5): the one with the largest count at the
 stage that fell. That stage must clear its floor; say how many clicks or purchases the
 case rests on, and when it is small, say so. Call it "the case to check with the
@@ -304,7 +306,7 @@ results."
 ```
 Search Query Performance & Share Tracker - {store} - {marketplace}
 Before = weeks of {dates}, after = weeks of {dates}{; "you asked for M weeks, the data holds N in a row"}.
-Store: {b} -> {a} purchases after a search ({+/-x}%). Looked closer at the 10 products that lost the most.
+Store: {b} -> {a} purchases after a search ({+/-x}%). Looked closer at the 10 products that lost the most{; "11, because two tie at 10th place with {n} lost each"}.
 
 PRODUCTS BY PURCHASES LOST (all their tracked queries)
   product             purchases     on its {n} money keywords: purchases / impr share / click share / purchase share   searches/wk   cause
