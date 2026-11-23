@@ -116,14 +116,19 @@ Then classify each high-value query:
 Run this before any rewrite, and always when the user wants to win back a query or
 explain a drop. If one of these fits, say it in the first lines of the answer:
 
-- **The offer.** In the weeks of the drop a week has no units sold, or the Buy Box
-  average of a week is under 90% and at least 5 points under the weeks before, or the
-  average price paid rose by 5% or more while units fell -> stock, Buy Box or price.
-  Copy will not fix it.
-- **Another of your own products took the place.** On the query that fell, your
-  tracked products together held their share -> a swap between your products, often
-  two pack sizes or colours under one parent. Decide which should lead; nothing was
-  lost.
+- **The offer.** In the weeks of the drop a week has no units shipped and a Buy Box
+  under 90%, or the Buy Box of a week is under 90% and at least 5 points under the
+  weeks before (both weighted by page views, step 4c), or the average price paid rose
+  by 5% or more while units fell -> stock, Buy Box or price. Copy will not fix it. A
+  week with no units shipped while the Buy Box held, or with no Buy Box data, is a
+  note ("check stock"), not the cause: units count shipped orders only.
+- **Another of your own products took the place.** On the query that fell, another
+  of your tracked products gained at least half of the share points this product lost
+  at the stage that fell, and your products together fell by less than 10%, or rose
+  -> a swap between your products, often two pack sizes or colours under one parent.
+  Decide which should lead; nothing was lost. A small move of the total alone is not
+  a swap: a product that falls from 2% to 1% next to one of yours that holds 50% moves
+  the total from 52% to 51%. No measured gainer, no swap.
 - **The words are already there.** The query's terms are in the title, item highlight,
   bullets or backend terms -> no keyword explains the loss. Look at clicks (main image,
   price, rating) and at the product page.
@@ -145,8 +150,11 @@ explain a drop. If one of these fits, say it in the first lines of the answer:
   (name it from `amazon_products_by_child_asin`). If none rose, say that you sell none
   on that query; supporting your own product of that kind may win back more than a
   rewrite.
-- **Ads.** If the product's ad clicks fell in the same weeks, say so: SQP mixes
-  sponsored and organic results.
+- **Ads.** If the product's Sponsored Products and Display clicks fell in the same
+  weeks, say so as context: SQP mixes sponsored and organic results. The ASIN-level
+  ads data has no Sponsored Brands clicks (empty, not 0) and no Sponsored TV or DSP, so
+  a shift between ad formats can look like a fall. Do not call ads the cause without
+  campaign or search-term data that shows it.
 
 The rewrite still follows, sized to what the data supports. When the listing already
 covers its top queries, the honest output is a short list of small changes and the
@@ -221,16 +229,18 @@ review text: ask the user to paste a few, or skip this and say so.
     of null" gap COSMO penalises). One row per SKU/marketplace, a current snapshot (use
     `last_seen_at` for freshness; it is not a time series and there is no listing
     history).
-    **Read the flat text columns first:** `item_name` (the submitted title),
+    **Read the flat text columns first:** `item_name` (the listing title; when the
+    seller submitted none it falls back to the summary title and then the catalog, so
+    it is not proof of what was submitted),
     `title_differentiation` (the item highlight Amazon shows next to the title in
     search results), `bullet_point_1` to `bullet_point_5`, `product_description`,
     `generic_keyword` (backend search terms), `product_type`, `parent_asin`, `sku`.
     They fit a chat as CSV. Count the item highlight as covered text in every keyword
-    audit, and leave it unchanged unless the user asks: this skill has no length rule
-    for it.
+    audit, and leave it unchanged unless the user asks or the click rate is the problem
+    (step 10).
     JSON columns: `summaries` (small: status, displayed title, last update), `issues`,
-    `attributes` (large), `offers`. Pull `attributes` only for the attribute audit, and
-    only for the SKU that carries the content. Inside `attributes`:
+    `attributes` (large), `offers`. Pull `attributes` only for the SKU that carries the
+    content (the submitted title in step 3 and the attribute audit). Inside `attributes`:
     - **Backend search terms** = `attributes.generic_keyword[].value` - an array of
       `{language_tag, marketplace_id, value}`; `value` is Amazon's real "Search Terms"
       blob (space-separated). Pick the entry matching the target `marketplace_id`. **No
@@ -273,11 +283,15 @@ review text: ask the user to paste a few, or skip this and say so.
     advertise the product, or to the product's theme words, and say that the harvest
     is per campaign, not per product.
   - `amazon_ads_performance_by_child_asin_and_date` - `ad_impressions`, `ad_clicks`
-    and `ad_orders` per product and day: whether ads still run on this product.
+    and `ad_orders` per product, `ad_campaign_type` and day: whether ads still run on
+    this product. It covers Sponsored Products, Display and Brands; Brands rows have
+    empty clicks and impressions, and Sponsored TV and DSP are not in it.
   - `amazon_profit_by_sku_and_date` (**premium**) - the offer check by week:
-    `total_units_sold`, `total_sales` and `avg_buybox_percentage` per `child_asin`. Its
-    Buy Box column can lag by more than a week: an empty Buy Box next to units sold
-    means "not published yet".
+    `total_units_sold` (shipped units only), `total_sales`, `avg_buybox_percentage` and
+    `total_page_views` per `child_asin`. The Buy Box and page views repeat on every SKU
+    row of the ASIN and day: never average them over rows (step 4c). The Buy Box can
+    lag by more than a week: an empty Buy Box next to units sold means "not published
+    yet"; 0 with no page views means no traffic.
   - `amazon_fba_inventory_health` (optional, **premium**) - `your_price`, `featuredoffer_price`,
     `lowest_price_new_plus_shipping`, `available` for a price/stock read (a CVR leak is
     often price or an out-of-stock, not copy). Premium note: a premium export costs 5 AI Tokens instead of 2 - nothing else differs, and the table is part of the always-on default dataset, so it is never disabled. A 0-row export means no data in the window or an initial load still in progress - say which, and use `amazon_listings_with_cogs.listing_price_value` / `fba_quantity_available` instead; never render zeros.
@@ -310,10 +324,13 @@ review text: ask the user to paste a few, or skip this and say so.
      not pull them for all.
 
    Record both titles with their lengths: **displayed** = `summaries.itemName` (this is
-   the one the 75-char compliance verdict uses) and **submitted** = `item_name`. If
-   they differ, say so in the header - Amazon is displaying a different title than the
-   one on file, and the submitted title's length proves nothing. Pull `attributes` in a
-   further export, for that one SKU, only when you reach the attribute audit (step 9).
+   the one the 75-char compliance verdict uses) and **submitted** = `attributes.item_name`
+   of the SKU that carries the content. Pull `attributes` for that one SKU in a third
+   export (step 9 needs it too). The flat `item_name` is for the keyword audit only:
+   it falls back to the displayed title when nothing was submitted. If `attributes`
+   has no `item_name`, say "no submitted title found" instead of comparing. If the two
+   titles differ, say so in the header - Amazon is displaying a different title than
+   the one on file, and the submitted title's length proves nothing.
    Fall back to `amazon_products_by_child_asin` for title / bullets / category / BSR
    if the listing columns are empty - filtered to the target
    `marketplace_country_code`, since it returns one row per marketplace of the seller.
@@ -346,27 +363,49 @@ review text: ask the user to paste a few, or skip this and say so.
      add one export `groupBy: ["date", "search_query"]` with the same sums and
      `max(child_asin_search_query_score)`, and show the click rate against the market
      week by week when it moved.
-   - **4c. Cause check** (framework: "First: is the listing the cause?"). One export
-     on `amazon_profit_by_sku_and_date` for the ASIN over the SQP weeks, `groupBy:
-     ["date", "child_asin"]` with `dateInterval: "WEEK"` (weeks start on Sunday, like
-     SQP), `sum(total_units_sold)`, `sum(total_sales)`, `avg(avg_buybox_percentage)`;
-     average price paid = sales / units. Compare `lastUpdatedDate` from step 3 with the
-     last SQP week. When the user names a query that fell, add one SQP export filtered
-     to that query, `groupBy: ["date", "child_asin"]`, summing each product's
-     impressions, clicks and purchases and taking `max` of the three query totals: it
-     shows whether another of your products took the place (your products together
-     fell by less than 10%, or rose). For the ads line, one export on
-     `amazon_ads_performance_by_child_asin_and_date` for the ASIN, by week, with
-     `sum(ad_clicks)` as `clicks_from_ads` (an alias must differ from the column name). If the Search Query Performance & Share Tracker already ran in
-     this chat, reuse its offer and own-products results instead of exporting them
-     again. Put the result in the first lines of the answer.
-     When the click rate fell while searches held, add one export on
-     `amazon_brand_analytics_search_terms_weekly` (if enabled): filter
-     `marketplace_country_code` and `search_term` = the main query, over the SQP
-     weeks, columns `date`, `clicked_asin`, `clicked_item_name`, `click_share_rank`,
-     `click_share`, `conversion_share`. It lists only the top three clicked products
-     per week, `clicked_item_name` can be empty, and its latest week can be a week
-     older than SQP.
+   - **4c. Cause check** (framework: "First: is the listing the cause?"). Compare two
+     windows: the latest weeks against the same number of weeks before them (half of
+     the SQP weeks each, at most 4 against 4).
+     - **Offer.** One export on `amazon_profit_by_sku_and_date` for the ASIN over the
+       SQP weeks, `groupBy: ["date", "child_asin"]` with `dateInterval: "WEEK"` (weeks
+       start on Sunday, like SQP), `sum(total_units_sold)`, `sum(total_sales)` and
+       `min(avg_buybox_percentage)` as `lowest_buybox_day`; average price paid = sales
+       / units. The Buy Box repeats on every SKU row of the ASIN and day, so an average
+       over rows counts a day once per SKU; a week whose lowest day is 90% or more
+       cannot be under 90%. If a week's lowest day is under 90%, or a week has no
+       units, add one daily export (`groupBy: ["date", "child_asin"]`, no
+       `dateInterval`, `max(avg_buybox_percentage)`, `max(total_page_views)`): a
+       window's Buy Box = sum of Buy Box x page views / sum of page views, leaving out
+       days with an empty Buy Box. Compare `lastUpdatedDate` from step 3 with the last
+       SQP week.
+     - **Your other products.** Take the query that fell: the one the user names; if
+       none is named, the query with the most clicks lost between the two windows among
+       those in the week-by-week pull (4b), or the product's top query by clicks when
+       none fell. One SQP export filtered to that query, `groupBy: ["date",
+       "child_asin"]`, summing each product's impressions, clicks and purchases and
+       taking `max` of the three query totals. A swap needs another of your products
+       whose share at the stage that fell rose by at least half of the points this
+       product lost, with your products together down by less than 10%, or up.
+     - **Ads.** One export on `amazon_ads_performance_by_child_asin_and_date` for the
+       ASIN, by week, `groupBy: ["date", "ad_campaign_type"]`, `sum(ad_clicks)` as
+       `clicks_from_ads` (an alias must differ from the column name). Report Sponsored
+       Products and Display clicks; Sponsored Brands clicks are empty in this table
+       (missing, not 0).
+     - **Reuse.** If the Search Query Performance & Share Tracker already ran in this
+       chat on this ASIN, reuse its offer and own-products results for the same query
+       and windows instead of exporting them again; anything it did not cover, export.
+     - Put the result in the first lines of the answer, and print every check you
+       could not run as "not checked", never as "none" or "steady".
+     - When the click rate fell while searches held, add one export on
+       `amazon_brand_analytics_search_terms_weekly` (if enabled): filter
+       `marketplace_country_code` and `search_term` = the main query, over the SQP
+       weeks, columns `date`, `department_name`, `clicked_asin`, `clicked_item_name`,
+       `click_share_rank`, `click_share`, `conversion_share`. Ranks and shares are per
+       department: compare one department across weeks - the marketplace-wide one (for
+       example "Amazon.de") when it is there, else the one with rows in the most weeks -
+       and never mix departments in one list. It lists only the top three clicked
+       products per term, department and week, `clicked_item_name` can be empty, and
+       its latest week can be a week older than SQP.
 5. **Theme check (first):** cluster into themes, find the best-converting theme with
    real volume, check whether its words are in the title. Judge a theme only when it
    holds at least 20 of the product's clicks; print clicks and purchases next to every
@@ -420,8 +459,10 @@ review text: ask the user to paste a few, or skip this and say so.
       after the data. Offer the brand-first version as an option to test later.
     - **Item highlight** (`title_differentiation`): it is shown next to the title in
       search results. When the click rate is the problem, propose a new one as an
-      option to test, built from the themes that convert, and say that DataDoe cannot
-      confirm its length limit. Otherwise leave it unchanged unless the user asks.
+      option to test, built from the themes that convert, at most 125 characters
+      (Amazon's published limit, July 2026). Say that whether the field is open depends
+      on the marketplace and product type, which DataDoe cannot confirm. Otherwise
+      leave it unchanged unless the user asks.
     - **Title <= 75 chars**: brand first, then the single best-converting theme, then
       audience/use-case. One keyword each, no repetition, no promo/subjective words, no
       banned symbols. This is a precision line, not a keyword dump.
@@ -487,10 +528,10 @@ Listing Optimizer - {ASIN} - {marketplace}   (displayed title {chars}/75 chars {
 {if submitted != displayed: "Submitted item_name is {chars}/75 but Amazon displays a different {chars}-char title - contribution not shown."}
 SQP coverage: {n} weeks present ({first}..{last}), latest {age} weeks old{; "snapshot mode" / "monthly fallback" if < ~4 weeks}
 CAUSE CHECK
-  offer: {Buy Box {x}%, units steady | Buy Box {x}% in week of {date} | no units since {date}}
-  your other products: {none took the place | "{query}" went to {asin}}
-  searches: {b} -> {a} a week · shoppers now click: {same kinds of product | {other kind}, from Brand Analytics}
-  ads: clicks {b} -> {a} a week · query words in the listing: {yes/no}
+  offer: {Buy Box {x}%, units steady | Buy Box {x}% in week of {date} | no units shipped and Buy Box {x}% in week of {date} | note: no units shipped in week of {date}, Buy Box held - check stock}
+  your other products on "{query}": {{asin} gained {p} of the {q} points | none of yours gained | not checked}
+  searches: {b} -> {a} a week · shoppers now click: {same kinds of product | {other kind}, from Brand Analytics, department {d} | not checked}
+  ads (Sponsored Products and Display): clicks {b} -> {a} a week {| not checked} · query words in the listing: {yes/no}
   listing last updated {date}{, during or after the last SQP week: what changed is unknown}
 {if the listing is not the cause: "Copy is not the cause of this drop: {reason}. The changes below are small."}
 
@@ -563,6 +604,10 @@ days-to-weeks" plan - a diagnosis and the rewrite, not a keyword list.
   listing, listing edited after the data, fewer searches) and say so in the first lines
   when the listing is not the cause?
 - Did I size the rewrite to the finding instead of rewriting everything?
+- Does a swap name the product of mine that gained, and did I print every check I
+  could not run as "not checked"?
+- Did I weight the Buy Box by page views per ASIN and day, compare the same Brand
+  Analytics department across weeks, and keep the ads line to the formats it covers?
 - Did I judge exposure by impressions per search, not by the size of the impression
   share?
 - Did I probe SQP coverage (`groupBy date`) before the funnel and state which weeks the

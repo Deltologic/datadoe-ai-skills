@@ -85,10 +85,15 @@ far below units sold.
 
   Name the weeks of both windows in the answer. A week of the run that falls outside
   both windows is not used in the store view.
-- Fewer than 4 weeks: pull the monthly source and compare the latest month with the one
-  before. Fewer than 2 comparable periods either way: **baseline mode** - report the
-  current shares and say "a trend needs at least 4 weeks; only N available". Never
-  build a trend from one period.
+- In the product view the run is the named products' own run (step 2), not the
+  store's: a product added to the SQP list last week has one week, whatever the store
+  holds.
+- Fewer than 4 weeks: use the monthly source (step 2) and compare the latest complete
+  month with the one before. A month holds one row per product and query, so there a
+  pair is comparable when it has a row in both months (the 2-week rule below is for
+  weekly windows). Fewer than 2 complete months as well: **baseline mode** - report
+  the current shares (step 2) and say "a trend needs at least 4 weeks; only N
+  available". Never build a trend from one period.
 
 ### 3. Products first, then their money keywords
 
@@ -132,8 +137,8 @@ Check in this order; the first that fits wins.
 
 | # | Cause | How to tell | What it means |
 |---|---|---|---|
-| 1 | **Offer** | In an "after" week no units were sold; or the Buy Box average of an "after" week is under 90% and at least 5 points under the "before" average; or the average price paid rose by 5% or more while units fell | Stock, Buy Box or price. Fix the offer; the listing is not the cause |
-| 2 | **Swap between your own products** | A stage is down, and at the earliest stage that fell (impressions before clicks before purchases) all your tracked products together fell by less than 10%, or rose, on the same queries | Another of your products took the place. Decide which should lead |
+| 1 | **Offer** | An "after" week has no units shipped and a Buy Box under 90%; or the Buy Box of an "after" week is under 90% and at least 5 points under the "before" window (both weighted by page views, step 7); or the average price paid rose by 5% or more while units fell | Stock, Buy Box or price. Fix the offer; the listing is not the cause |
+| 2 | **Swap between your own products** | A stage is down; on the query where it fell most, another of your tracked products gained at that stage at least half of the share points this product lost (step 8); and at that stage all your tracked products together fell by less than 10%, or rose, on the same queries | Another of your products took the place. Decide which should lead |
 | 3 | **Shown less** | Impression share is down | Check that the query's words are in the title, bullets and backend terms, and whether ads still run on it |
 | 4 | **Clicked less** | Impression share held, click share is down | What shoppers see in the results: main image, title, price, rating, badge |
 | 5 | **Bought less** | Click share held, purchase share is down | The product page: price, reviews, bullets, images, delivery promise |
@@ -142,6 +147,15 @@ Check in this order; the first that fits wins.
 
 Notes that go next to the cause:
 
+- **No swap without a gainer.** A small move of your products together proves nothing
+  on its own: a product that falls from 2% to 1% next to a product of yours that holds
+  50% moves the total from 52% to 51%. When no other product of yours gained at least
+  half of the lost share points on that query, or step 8 did not measure it, keep the
+  stage cause (3 to 5).
+- **No units, but a Buy Box.** `total_units_sold` counts shipped units only. A week
+  with no units shipped while the Buy Box held at 90% or more, or with no Buy Box
+  data for that week, does not prove a stock problem: add "no units shipped in the
+  week of {date} - check stock" as a note and go on to the next check.
 - **Buy Box low all along.** Under 90% in both windows without the 5-point drop is a
   standing problem, not the cause of this drop. Say so and go on to the next check.
 - **Average price paid** is sales divided by units, so it also moves when the mix of
@@ -150,9 +164,9 @@ Notes that go next to the cause:
 - **A swap explains the place, not always the whole drop.** If your products together
   also lost 10% or more at a later stage on those queries, say that too.
 - **Partly a swap.** If your products together fell by 10% or more but one other
-  product of yours gained at least half of what the flagged product lost at that stage
-  on the same query (in counts: clicks, impressions or purchases), keep the cause and
-  add: "{product} gained {n} of the {m}".
+  product of yours gained at least half of the share points the flagged product lost
+  at that stage on the same query, keep the cause and add: "{product} gained {n} of
+  the {m}" (in clicks, impressions or purchases, whichever stage fell).
 - When the product that gained has the same `parent_asin`, call it another variation
   of the same listing.
 - Prices are in the marketplace currency (`sellers_and_vendors_list`).
@@ -190,11 +204,13 @@ listing problem.
     pair across weeks, or take `max` per week.
   - `amazon_child_product_organic_search_ranks_per_month` - the same columns per month,
     for accounts with under 4 weeks.
-  - `amazon_profit_by_sku_and_date` - the offer check: `total_units_sold`,
-    `total_sales`, `avg_buybox_percentage` by `child_asin` and week. Premium table: an
-    export costs 5 AI Tokens instead of 2, nothing else differs. Its Buy Box and
-    traffic columns can lag by more than a week: an empty Buy Box next to units sold
-    means "not published yet", not a lost Buy Box.
+  - `amazon_profit_by_sku_and_date` - the offer check: `total_units_sold` (shipped
+    units only), `total_sales`, `avg_buybox_percentage` and `total_page_views` by
+    `child_asin` and date. Premium table: an export costs 5 AI Tokens instead of 2,
+    nothing else differs. The Buy Box and page views describe the child ASIN and repeat
+    on every SKU row of that ASIN and day, so never average them over rows (step 7).
+    They can lag by more than a week: an empty Buy Box next to units sold means "not
+    published yet", not a lost Buy Box; 0 with no page views means no traffic.
   - `amazon_products_by_child_asin` - `product_name` and `parent_asin`. It has a row
     per marketplace: filter `marketplace_country_code` (rows use `GB` for the United
     Kingdom).
@@ -207,10 +223,13 @@ listing problem.
 - **Keep every SQP export grouped and small.** A grouped export returns only the
   columns you ask for; raw SQP rows add about 230 characters of account columns each
   (350 raw rows came to 83,000 characters). With the steps below the product screen
-  returns up to 100 short rows and no other export passes about 150 rows. An `in` value is a comma-separated list: leave out a query that
-  contains a comma and say so.
-- When a keyword export returns exactly `limit` rows, the cut falls inside a tie and
-  is arbitrary: drop the rows at the smallest value on the list.
+  returns up to 100 short rows, and most other exports stay under about 150 rows. An
+  `in` value is a comma-separated list: leave out a query that contains a comma and
+  say so.
+- **Never decide from a cut list.** When an export returns exactly its `limit`, rows
+  are missing. For the product screen this is planned (step 3). For keywords and
+  before/after rows, split the products into two exports and run them again; never
+  pick a product's keywords, or judge its pairs, from a list that was cut.
 - `child_asin_organic_search_rank` is a deprecated name for the Search Query Score; do
   not use it.
 
@@ -222,10 +241,21 @@ and never pulls raw rows: the server ranks the products, and the detail is pulle
 
 1. `sellers_and_vendors_list` -> pick the seller.
 2. **Weeks probe.** Confirm the weekly SQP source is enabled. Then one export on it
-   from the Sunday 12 weeks before today to today, `groupBy: ["date"]`, with `countDistinct(child_asin)`,
-   `count(search_query)` and `sum(child_asin_purchase_count)`. Find the unbroken run
-   that ends at the newest week and set the two windows (framework 2). The weekly
-   purchase sums give the store's search purchases before and after.
+   from the Sunday 12 weeks before today to today, `groupBy: ["date"]`, with
+   `countDistinct(child_asin)`, `count(search_query)` and
+   `sum(child_asin_purchase_count)`; in the product view, filtered with `child_asin`
+   `in` the named products. Find the unbroken run that ends at the newest week and set
+   the two windows (framework 2). The weekly purchase sums give the store's (or the
+   products') search purchases before and after.
+   - Fewer than 4 weeks: the same probe on the monthly source over the last 6 months.
+     Two complete months or more: run steps 3 to 10 on the monthly source with the
+     latest month as "after" and the one before as "before".
+   - Fewer than 2 complete months as well: **baseline mode**. One export over the
+     weeks there are, `groupBy: ["child_asin", "search_query"]` (product view: filtered
+     to the named products), `sum` of the six counts as in step 5 (the product's
+     purchases as `purchases`), `sum(search_query_volume)` and `count(search_query)`,
+     ordered by `purchases` descending, `limit: 30`. Report its shares (Output format)
+     and stop.
 3. **Product screen.** Two exports, `groupBy: ["child_asin"]`,
    `sum(child_asin_purchase_count)` as `purchases`:
    - the "before" window, ordered by `purchases` descending, `limit: 100`;
@@ -239,7 +269,8 @@ and never pulls raw rows: the server ranks the products, and the detail is pulle
    `child_asin` `in` the 10 products, `groupBy: ["child_asin", "search_query"]`,
    `sum(child_asin_purchase_count)` as `purchases` and `sum(search_query_volume)` as
    `searches`, `having` `purchases >= 5`, ordered by `purchases` descending,
-   `limit: 100`. Keep at most the 8 strongest per product; on a tie, the one with more
+   `limit: 300`. If it returns exactly 300 rows, run it again in two halves of the
+   products. Keep at most the 8 strongest per product; on a tie, the one with more
    searches. With a tie at 10th place in step 3, "the 10 products" in steps 4 to 9 means
    all the products kept.
 5. **Before and after.** Two exports, one per window, `groupBy: ["child_asin",
@@ -248,18 +279,31 @@ and never pulls raw rows: the server ranks the products, and the detail is pulle
    `child_asin_impression_count`, `search_query_total_impression_count`,
    `child_asin_click_count`, `search_query_total_click_count`,
    `child_asin_purchase_count`, `search_query_total_purchase_count` and
-   `search_query_volume`, plus `count(search_query)` as the weeks present. Use only the
-   pairs kept in step 4 (the two filters also return other combinations); drop head
-   terms and pairs that are not comparable.
+   `search_query_volume`, plus `count(search_query)` as the weeks present, ordered by
+   `child_asin`, `limit: 300`. Use only the pairs kept in step 4: the two filters also
+   return other combinations when products share queries, so a window can pass 100
+   rows. If a window returns exactly 300 rows, run it again in two halves of the
+   products, each with only its own products' queries. Drop head terms and pairs that
+   are not comparable.
 6. **Shares and floors.** Per pair and per product, work out the three shares and the
    searches per week for both windows and mark each stage down, up, held or too few
    (framework 4).
 7. **Offer check.** One export on `amazon_profit_by_sku_and_date` for the 10 products
    over both windows, `groupBy: ["date", "child_asin"]` with `dateInterval: "WEEK"`
    (weeks start on Sunday, like SQP), `sum(total_units_sold)`, `sum(total_sales)` and
-   `avg(avg_buybox_percentage)`. Average price paid = sales / units. Do not read the
-   unfinished current week. This export can stay pending for a minute: poll
-   `exports_get` until it completes.
+   `min(avg_buybox_percentage)` as `lowest_buybox_day`. Average price paid = sales /
+   units. Do not read the unfinished current week. This export can stay pending for a
+   minute: poll `exports_get` until it completes.
+   - The Buy Box repeats on every SKU row of an ASIN and day, so an average over rows
+     counts a day once per SKU. The weekly minimum is safe: a week whose lowest day is
+     90% or more cannot be under 90%.
+   - For the products with a week whose lowest day is under 90%, or with a week of no
+     units, one more export: those products only, both windows, `groupBy: ["date",
+     "child_asin"]` with no `dateInterval` (one row per day), `max(avg_buybox_percentage)`
+     and `max(total_page_views)`. A window's Buy Box = the sum of Buy Box x page views
+     over its days, divided by the sum of page views. Leave out days with an empty Buy
+     Box (not published yet); a window with no page views has no Buy Box rate - say
+     "no traffic data".
 8. **Your products together** (the swap check). Only for products with a stage down
    that the offer check did not explain. Take their money keywords where the share at
    that stage fell by 20% or more (floor or not), strongest first, at most 15 queries
@@ -277,7 +321,9 @@ and never pulls raw rows: the server ranks the products, and the detail is pulle
      one export. Divide each product's counts by that query's window totals from the
      first export: the product that gained is the one whose share at that stage rose
      the most in percentage points (counts fall for everyone when searches fall). This
-     export also decides "partly a swap".
+     export decides the swap (framework 5, cause 2) and "partly a swap": compare the
+     points that product gained with the points the flagged product lost on that
+     query. A product that does not get this export cannot be called a swap.
 9. **Names.** One export on `amazon_products_by_child_asin` for the 10 products and
    any product that gained in step 8, filtered to the marketplace: `child_asin`,
    `product_name`, `parent_asin`. Shorten long titles to brand, product and size.
@@ -318,8 +364,8 @@ REAL LOSSES OF SHARE (shown less / clicked less / bought less)
   [or: "None. Every drop above is fewer searches, a swap between your products, or the offer."]
 
 NOT A LISTING PROBLEM
-  {name}: offer - Buy Box {x}% in the week of {date} / no units since {date}
-  {name}: swap - "{query}" went to your {other product}; your products together {b}% -> {a}%
+  {name}: offer - Buy Box {x}% in the week of {date} / no units shipped and Buy Box {x}% in the week of {date}
+  {name}: swap - "{query}" went to your {other product} (+{p} points of the {q} it lost); your products together {b}% -> {a}%
   {name}: fewer searches - "{query}" {b} -> {a} searches a week, shares held
 
 Left out: {count} head terms, {count} pairs not comparable. Notes: {Buy Box low all along, cuts at a limit}.
@@ -349,11 +395,11 @@ the best seller: every share held, but searches for its queries fell by a quarte
 **fewer searches**, nothing to fix. The product with the sharpest fall in impression
 share (2.6% to 0.3% on the main query) turns out to be a **swap**: another pack size
 under the same parent took the place, and the seller's products together went from 15%
-to 17% of that query's impressions. A third product sold no units in the newest week
--> **offer**, out of stock. A fourth lost clicks in the one week its Buy Box fell to
+to 17% of that query's impressions. A third product shipped no units in the newest week
+while its Buy Box fell to 0 -> **offer**: check stock. A fourth lost clicks in the one week its Buy Box fell to
 61% -> **offer**. A fifth lost purchase share with a Buy Box that was low all along:
-the purchases went to another of the seller's products -> **swap**, with a note to fix
-the Buy Box. One product is left with the Buy Box at 100%, a steady price, the same
+another of the seller's products gained most of those purchases on the same query ->
+**swap**, with a note to fix the Buy Box. One product is left with the Buy Box at 100%, a steady price, the same
 impressions and half the clicks -> **clicked less**, the one case to hand to the
 Listing Optimizer. Without the cause checks all six would have read as lost keywords.
 
@@ -369,15 +415,22 @@ Listing Optimizer. Without the cause checks all six would have read as lost keyw
   stage down?
 - Did every one of the 10 products get the offer check, and every product with a
   stage down that the offer did not explain the swap check, before I called it a loss?
+- Does every swap name the product that gained, with the points it gained?
+- Did I weight the Buy Box by page views per ASIN and day, and treat a week with no
+  units but a Buy Box as a note, not as out of stock?
 - Did I look at click share and purchase share, not only impression share?
 - Did I avoid calling an impression share "low" because of its size?
-- Is every SQP export grouped and small (the screen about 100 rows, the rest under about 150)?
+- Is every SQP export grouped and small, and did I split any export that came back at
+  its `limit` instead of reading a cut list?
 - Did I say how many clicks or purchases the listing case rests on?
 - Did I keep Search Query Score as context only?
 
 ## Common mistakes
 
-- Calling a product "lost" when another of your own products took its place.
+- Calling a product "lost" when another of your own products took its place, or
+  calling it a swap when no product of yours gained.
+- Averaging the Buy Box over SKU rows, or calling a week with no shipped units "out of
+  stock" while the Buy Box held.
 - Blaming search for a product that was out of stock or lost the Buy Box.
 - Calling a Buy Box that was low all along the cause of a new drop.
 - Reading a season as a loss: purchases fall with searches while every share holds.
