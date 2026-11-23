@@ -112,9 +112,12 @@ far below units sold.
   Amazon's report holds at most 100 queries per product and week, so a missing row
   means "not in that week's list", not zero. Leave pairs that are not comparable out
   and count them.
-- A product with no money keyword sells on many small queries. Do not judge its
-  shares; it still gets the offer check, and without an offer cause it gets "no clear
-  cause - spread over small queries".
+- A product with no money keyword sells on many small queries. In the store view do
+  not judge its shares; it still gets the offer check, and without an offer cause it
+  gets "no clear cause - spread over small queries". In the product view the user asked
+  about that product, so take instead its queries with at least 20 clicks in the two
+  windows together (at most 8): their impression and click stages can clear the
+  floors, and their purchases are too few to call.
 
 ### 4. Three stages, with floors
 
@@ -127,7 +130,9 @@ earlier window holds at least this much at that stage: 500 impressions, 20 click
 purchases (the product's own counts, not the query's). Judge a pair on its own counts
 and a product on its summed counts. **Up**
 mirrors it; anything between is **held**. Under the floor the answer is "too few to
-call" - a watch item, never a loss.
+call" - a watch item, never a loss. When more than one stage is down, the earliest one
+counts (impressions, then clicks, then purchases): it is the stage the swap check and
+the cause use.
 
 ### 5. Cause before alarm
 
@@ -137,7 +142,7 @@ Check in this order; the first that fits wins.
 
 | # | Cause | How to tell | What it means |
 |---|---|---|---|
-| 1 | **Offer** | An "after" week has no units shipped and a Buy Box under 90%; or the Buy Box of an "after" week is under 90% and at least 5 points under the "before" window (both weighted by page views, step 7); or the average price paid rose by 5% or more while units fell | Stock, Buy Box or price. Fix the offer; the listing is not the cause |
+| 1 | **Offer** | An "after" week has no units shipped and either a Buy Box under 90% or no page views at all while the "before" window had them (the listing was not reachable); or the Buy Box of an "after" week is under 90% and at least 5 points under the rate of the whole "before" window (both weighted by page views, step 7); or the average price paid rose by 5% or more while units fell | Stock, Buy Box, listing status or price. Fix the offer; the copy is not the cause |
 | 2 | **Swap between your own products** | A stage is down; on the query where it fell most, another of your tracked products gained at that stage at least half of the share points this product lost (step 8); and at that stage all your tracked products together fell by less than 10%, or rose, on the same queries | Another of your products took the place. Decide which should lead |
 | 3 | **Shown less** | Impression share is down | Check that the query's words are in the title, bullets and backend terms, and whether ads still run on it |
 | 4 | **Clicked less** | Impression share held, click share is down | What shoppers see in the results: main image, title, price, rating, badge |
@@ -154,8 +159,11 @@ Notes that go next to the cause:
   stage cause (3 to 5).
 - **No units, but a Buy Box.** `total_units_sold` counts shipped units only. A week
   with no units shipped while the Buy Box held at 90% or more, or with no Buy Box
-  data for that week, does not prove a stock problem: add "no units shipped in the
-  week of {date} - check stock" as a note and go on to the next check.
+  data published for that week, does not prove a stock problem: add "no units shipped
+  in the week of {date} - check stock" as a note and go on to the next check. A week
+  with no units and no page views, after a "before" window with page views, is
+  different: nobody reached the listing, so it was out of stock, suppressed or
+  inactive -> cause 1.
 - **Buy Box low all along.** Under 90% in both windows without the 5-point drop is a
   standing problem, not the cause of this drop. Say so and go on to the next check.
 - **Average price paid** is sales divided by units, so it also moves when the mix of
@@ -171,20 +179,20 @@ Notes that go next to the cause:
   of the same listing.
 - Prices are in the marketplace currency (`sellers_and_vendors_list`).
 
-Causes 3 to 5 are real losses of share. Causes 4 and 5, and cause 3 when the query's
-words are missing from the listing, are the cases to check with the Listing Optimizer:
-it decides whether the copy is the cause, or the season, the ads, or a different kind
-of product shoppers now click. Causes 1, 2 and 6 are not listing problems: say so
-plainly.
+Causes 3 to 5 are real losses of share and the cases to check with the Listing
+Optimizer: it decides whether the copy is the cause, or the season, the ads, or a
+different kind of product shoppers now click. Causes 1, 2 and 6 are not listing
+problems: say so plainly.
 
 ### 6. Ranking and the listing case
 
 Show the 10 products ranked by purchases lost, each with its cause. Number the rows
 1, 2, 3 and so on without repeating a number; mark tied products with "(tie)" next to
 their loss, so a tie at 10th place reads 10 and 11, both "(tie)". Then name the
-biggest real loss of share (causes 3 to 5): the one with the largest count at the
-stage that fell. That stage must clear its floor; say how many clicks or purchases the
-case rests on, and when it is small, say so. Call it "the case to check with the
+case to check: among the products with cause 3, 4 or 5, the one that lost the most
+purchases (the first in the table). Its stage cleared its floor (framework 4); say how
+many impressions, clicks or purchases the case rests on, and when it is small, say
+so. Call it "the case to check with the
 Listing Optimizer", not a listing problem: this skill does not read the listing, the
 season or the ads. If no product has cause 3 to 5, say that none of the drops is a
 listing problem.
@@ -244,7 +252,8 @@ and never pulls raw rows: the server ranks the products, and the detail is pulle
    from the Sunday 12 weeks before today to today, `groupBy: ["date"]`, with
    `countDistinct(child_asin)`, `count(search_query)` and
    `sum(child_asin_purchase_count)`; in the product view, filtered with `child_asin`
-   `in` the named products. Find the unbroken run that ends at the newest week and set
+   `in` the named products and grouped by `["date", "child_asin"]`, so each product's
+   weeks and purchases show. Find the unbroken run that ends at the newest week and set
    the two windows (framework 2). The weekly purchase sums give the store's (or the
    products') search purchases before and after.
    - Fewer than 4 weeks: the same probe on the monthly source over the last 6 months.
@@ -272,7 +281,9 @@ and never pulls raw rows: the server ranks the products, and the detail is pulle
    `limit: 300`. If it returns exactly 300 rows, run it again in two halves of the
    products. Keep at most the 8 strongest per product; on a tie, the one with more
    searches. With a tie at 10th place in step 3, "the 10 products" in steps 4 to 9 means
-   all the products kept.
+   all the products kept. A product with no row here has no money keyword (framework
+   3); in the product view, run the same export with `sum(child_asin_click_count)` as
+   `clicks` and `having` `clicks >= 20` for it instead.
 5. **Before and after.** Two exports, one per window, `groupBy: ["child_asin",
    "search_query"]`, filtered with `child_asin` `in` the 10 products and `search_query`
    `in` the queries kept in step 4. Aggregations: `sum` of
@@ -300,10 +311,12 @@ and never pulls raw rows: the server ranks the products, and the detail is pulle
    - For the products with a week whose lowest day is under 90%, or with a week of no
      units, one more export: those products only, both windows, `groupBy: ["date",
      "child_asin"]` with no `dateInterval` (one row per day), `max(avg_buybox_percentage)`
-     and `max(total_page_views)`. A window's Buy Box = the sum of Buy Box x page views
-     over its days, divided by the sum of page views. Leave out days with an empty Buy
-     Box (not published yet); a window with no page views has no Buy Box rate - say
-     "no traffic data".
+     and `max(total_page_views)`. A week's Buy Box = the sum of Buy Box x page views
+     over its days, divided by the sum of page views; the "before" rate is the same sum
+     over the whole "before" window. The offer rule compares each "after" week with
+     the "before" rate. Leave out days with an empty Buy Box (not published yet). A
+     week with no page views has no Buy Box rate: say "no page views", and with no
+     units as well it falls under the "not reachable" rule (framework 5, cause 1).
 8. **Your products together** (the swap check). Only for products with a stage down
    that the offer check did not explain. Take their money keywords where the share at
    that stage fell by 20% or more (floor or not), strongest first, at most 15 queries
@@ -416,6 +429,7 @@ Listing Optimizer. Without the cause checks all six would have read as lost keyw
 - Did every one of the 10 products get the offer check, and every product with a
   stage down that the offer did not explain the swap check, before I called it a loss?
 - Does every swap name the product that gained, with the points it gained?
+- Is the case to check the product with cause 3, 4 or 5 that lost the most purchases?
 - Did I weight the Buy Box by page views per ASIN and day, and treat a week with no
   units but a Buy Box as a note, not as out of stock?
 - Did I look at click share and purchase share, not only impression share?

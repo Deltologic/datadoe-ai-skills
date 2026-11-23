@@ -120,7 +120,9 @@ explain a drop. If one of these fits, say it in the first lines of the answer:
   under 90%, or the Buy Box of a week is under 90% and at least 5 points under the
   weeks before (both weighted by page views, step 4c), or the average price paid rose
   by 5% or more while units fell -> stock, Buy Box or price. Copy will not fix it. A
-  week with no units shipped while the Buy Box held, or with no Buy Box data, is a
+  week with no units shipped and no page views, after weeks with page views, means
+  nobody reached the listing (out of stock, suppressed or inactive) -> the offer too.
+  A week with no units shipped while the Buy Box held, or with no Buy Box data, is a
   note ("check stock"), not the cause: units count shipped orders only.
 - **Another of your own products took the place.** On the query that fell, another
   of your tracked products gained at least half of the share points this product lost
@@ -139,17 +141,21 @@ explain a drop. If one of these fits, say it in the first lines of the answer:
   almost every day), so say "updated on {date}, what changed is unknown", ask the user
   whether the copy changed, and compare the same queries again after two new SQP
   weeks. It is a caveat, not a cause.
-- **Fewer searches.** The query's searches fell and the product's shares held ->
-  demand or season.
-- **Shoppers moved to another kind of product.** Searches held, the product is shown
-  as often, and its click rate fell while the market's click rate did not. Compare the
+- **Fewer searches.** The query's searches fell by 15% or more and the product's
+  shares held -> demand or season.
+- **Shoppers moved to another kind of product.** Searches held (fell by less than
+  15%), the product is shown as often (impressions per search fell by less than 20%),
+  and its click rate fell by 20% or more while the market's click rate did not. Compare the
   top clicked products for that query before and after (Brand Analytics, step 4c): a
   different type of product taking the clicks (a winter version, a multipack) is a
   season or assortment effect, not copy. To find your own product of that other kind,
   use the step 4c export for that query: the product of yours whose share rose there
   (name it from `amazon_products_by_child_asin`). If none rose, say that you sell none
   on that query; supporting your own product of that kind may win back more than a
-  rewrite.
+  rewrite. Before you recommend ads for it, check its offer in the step 4c export:
+  only with units shipped and a Buy Box of 90% or more in its latest week. Otherwise
+  the first fix is its stock or Buy Box ("restock {product}, then put it in front of
+  that query").
 - **Ads.** If the product's Sponsored Products and Display clicks fell in the same
   weeks, say so as context: SQP mixes sponsored and organic results. The ASIN-level
   ads data has no Sponsored Brands clicks (empty, not 0) and no Sponsored TV or DSP, so
@@ -364,10 +370,12 @@ review text: ask the user to paste a few, or skip this and say so.
      `max(child_asin_search_query_score)`, and show the click rate against the market
      week by week when it moved.
    - **4c. Cause check** (framework: "First: is the listing the cause?"). Compare two
-     windows: the latest weeks against the same number of weeks before them (half of
-     the SQP weeks each, at most 4 against 4).
-     - **Offer.** One export on `amazon_profit_by_sku_and_date` for the ASIN over the
-       SQP weeks, `groupBy: ["date", "child_asin"]` with `dateInterval: "WEEK"` (weeks
+     windows of equal length that touch, as the Search Query Performance & Share
+     Tracker does: 4 weeks against 4 with 8 or more weeks in a row, 3 against 3 with 6
+     or 7, 2 against 2 with 4 or 5.
+     - **Offer.** One export on `amazon_profit_by_sku_and_date` for the ASIN (and, when
+       you will name another product of yours below, that ASIN too) over the SQP
+       weeks, `groupBy: ["date", "child_asin"]` with `dateInterval: "WEEK"` (weeks
        start on Sunday, like SQP), `sum(total_units_sold)`, `sum(total_sales)` and
        `min(avg_buybox_percentage)` as `lowest_buybox_day`; average price paid = sales
        / units. The Buy Box repeats on every SKU row of the ASIN and day, so an average
@@ -385,7 +393,9 @@ review text: ask the user to paste a few, or skip this and say so.
        "child_asin"]`, summing each product's impressions, clicks and purchases and
        taking `max` of the three query totals. A swap needs another of your products
        whose share at the stage that fell rose by at least half of the points this
-       product lost, with your products together down by less than 10%, or up.
+       product lost, with your products together down by less than 10%, or up. Count a
+       product's share only from a row in at least 2 weeks of each window; with fewer,
+       say "share from the weeks present" and do not call it a swap on that alone.
      - **Ads.** One export on `amazon_ads_performance_by_child_asin_and_date` for the
        ASIN, by week, `groupBy: ["date", "ad_campaign_type"]`, `sum(ad_clicks)` as
        `clicks_from_ads` (an alias must differ from the column name). Report Sponsored
@@ -571,7 +581,7 @@ attributes_to_fill:
   {audience=..., intended_use=..., occasion=..., material=...}
 
 FIX FIRST (by impact, measurable)
-  0) {only when shoppers moved to another kind of product that you sell: put {your product} in front of that query (ads) - this comes before any copy change}
+  0) {only when shoppers moved to another kind of product that you sell: put {your product} in front of that query (ads) - this comes before any copy change; if that product has no stock or Buy Box in its latest week: "restock {your product} first"}
   1) {title: add best-converting theme / bring under 75 chars (headline)}
   2) {below-market CTR on "Y" -> new main image + title hook}
   3) {exposure: you win "Z" but see {s}% -> investigate ads / offer / stock / keyword coverage}
