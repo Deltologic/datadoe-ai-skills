@@ -336,7 +336,9 @@ and never pulls raw rows: the server ranks the products, and the detail is pulle
      the most in percentage points (counts fall for everyone when searches fall). This
      export decides the swap (framework 5, cause 2) and "partly a swap": compare the
      points that product gained with the points the flagged product lost on that
-     query. A product that does not get this export cannot be called a swap.
+     query. A product that does not get this export cannot be called a swap. Count a
+     gainer's share only from a row in at least 2 weeks of each window; with fewer,
+     say "share from the weeks present" and do not call it a swap on that alone.
 9. **Names.** One export on `amazon_products_by_child_asin` for the 10 products and
    any product that gained in step 8, filtered to the marketplace: `child_asin`,
    `product_name`, `parent_asin`. Shorten long titles to brand, product and size.
@@ -387,7 +389,10 @@ Next: {one action per real loss; for the case to check: "run the Listing Optimiz
 
 Product view: the same header, then one line per money keyword with the three shares
 before and after, searches per week, the cause, and the week-by-week impression share
-for the queries that moved.
+for the queries that moved. Say how much of the product's loss the judged queries
+carry: "these queries: {b} -> {a} of its {B} -> {A} search purchases". When they carry
+little of it, say that the rest is spread over smaller queries, so the cause shown
+explains part of the drop.
 
 Baseline mode (not enough history for a trend):
 

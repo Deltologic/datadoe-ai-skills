@@ -152,10 +152,10 @@ explain a drop. If one of these fits, say it in the first lines of the answer:
   use the step 4c export for that query: the product of yours whose share rose there
   (name it from `amazon_products_by_child_asin`). If none rose, say that you sell none
   on that query; supporting your own product of that kind may win back more than a
-  rewrite. Before you recommend ads for it, check its offer in the step 4c export:
-  only with units shipped and a Buy Box of 90% or more in its latest week. Otherwise
-  the first fix is its stock or Buy Box ("restock {product}, then put it in front of
-  that query").
+  rewrite. Before you recommend ads for it, check its offer (step 4c): only with units
+  shipped and a Buy Box of 90% or more in its latest complete week. Otherwise the
+  first fix is its stock or Buy Box ("restock {product}, then put it in front of that
+  query").
 - **Ads.** If the product's Sponsored Products and Display clicks fell in the same
   weeks, say so as context: SQP mixes sponsored and organic results. The ASIN-level
   ads data has no Sponsored Brands clicks (empty, not 0) and no Sponsored TV or DSP, so
@@ -373,9 +373,8 @@ review text: ask the user to paste a few, or skip this and say so.
      windows of equal length that touch, as the Search Query Performance & Share
      Tracker does: 4 weeks against 4 with 8 or more weeks in a row, 3 against 3 with 6
      or 7, 2 against 2 with 4 or 5.
-     - **Offer.** One export on `amazon_profit_by_sku_and_date` for the ASIN (and, when
-       you will name another product of yours below, that ASIN too) over the SQP
-       weeks, `groupBy: ["date", "child_asin"]` with `dateInterval: "WEEK"` (weeks
+     - **Offer.** One export on `amazon_profit_by_sku_and_date` for the ASIN over the
+       SQP weeks, `groupBy: ["date", "child_asin"]` with `dateInterval: "WEEK"` (weeks
        start on Sunday, like SQP), `sum(total_units_sold)`, `sum(total_sales)` and
        `min(avg_buybox_percentage)` as `lowest_buybox_day`; average price paid = sales
        / units. The Buy Box repeats on every SKU row of the ASIN and day, so an average
@@ -396,6 +395,11 @@ review text: ask the user to paste a few, or skip this and say so.
        product lost, with your products together down by less than 10%, or up. Count a
        product's share only from a row in at least 2 weeks of each window; with fewer,
        say "share from the weeks present" and do not call it a swap on that alone.
+     - **Your other product's offer.** When you name another product of yours (a
+       gainer, or a product of the kind shoppers moved to), run the same offer export
+       for it, from the start of the "after" window to the last complete week before
+       today: the profit table often holds a newer week than SQP, and a stock-out or
+       restock there changes the advice.
      - **Ads.** One export on `amazon_ads_performance_by_child_asin_and_date` for the
        ASIN, by week, `groupBy: ["date", "ad_campaign_type"]`, `sum(ad_clicks)` as
        `clicks_from_ads` (an alias must differ from the column name). Report Sponsored
