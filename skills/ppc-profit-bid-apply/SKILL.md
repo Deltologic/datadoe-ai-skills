@@ -39,10 +39,9 @@ target per keyword and sets bid = sales per click × target ACoS.
 
 ## Language
 
-Reply in Vietnamese by default. If the user writes in another language, reply
-in that language. Keep keyword text, ASINs, currency codes, and the approval
-word `apply` unchanged. Say in the reply language that only the exact word
-`apply` runs the live update.
+Reply in the language the user writes in. Keep keyword text, ASINs, currency
+codes, and the approval word `apply` unchanged. Say in the reply language that
+only the exact word `apply` runs the live update.
 
 ## The framework
 

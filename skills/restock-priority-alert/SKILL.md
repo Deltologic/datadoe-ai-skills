@@ -1,11 +1,12 @@
 ---
 name: restock-priority-alert
 description: >-
-  Rank the Amazon FBA SKUs about to stock out by urgency - days of supply vs sales
-  velocity, inbound-aware - with how many units to ship and by when, from DataDoe's FBA
-  Inventory Health with Amazon's FBA restock recommendations as the fallback. Live from DataDoe. Use for "restock", "what's about
-  to stock out", "days of supply", "reorder", "low inventory", "how much to ship in",
-  or "stockout risk".
+  Rank the Amazon FBA products about to stock out by urgency - stock and inbound added up
+  per product, set against 30-day sales and your lead time - with how many units to ship
+  and the latest day to ship them, next to Amazon's own recommended quantity. From
+  DataDoe's FBA Inventory Health, with Amazon's FBA restock recommendations as the
+  fallback. Live from DataDoe, read-only. Use for "restock", "what's about to stock out",
+  "days of supply", "reorder", "low inventory", "how much to ship in", or "stockout risk".
 metadata:
   author: DataDoe
   check-more-skills-at: https://app.datadoe.com/hub/ai-agents-and-skills
@@ -18,210 +19,532 @@ metadata:
 
 # Restock Priority Alert
 
-The SKUs about to stock out, ranked by urgency, with how many units to ship and by
-when - from DataDoe's FBA Inventory Health (premium) with Amazon's own FBA Restock
-Recommendations as the fallback, plus a velocity sanity-check against real sales. Stops
-the silent revenue loss of a hero SKU going to zero.
-
-<!-- TODO(Riegel, Q5): primary restock source still to be decided - inventory_health
-(premium; the empty table seen in July was most likely an initial-load state) vs
-restock_recommendations (free, optional, multi-country). Until answered,
-inventory_health is primary with an emptiness guard that falls back to
-restock_recommendations. -->
+The products that are out of stock or will run out before a new shipment can arrive,
+most urgent first, with how many units to ship and by when. One row per product, not per
+SKU: stock, inbound and sales are added up over all SKUs of the product first, so a spare
+SKU at zero does not raise a false alarm. From DataDoe's FBA Inventory Health, with
+Amazon's own FBA Restock Recommendations as the fallback. Read-only.
 
 ## When to use this
 
 - Weekly (or daily) restock planning.
-- Before a promo or peak season.
+- Before or during a promotion or a peak season.
 - "What's about to run out / what do I need to ship."
-- Trigger phrases: "restock", "what's about to stock out", "days of supply",
-  "reorder", "low inventory", "how much to ship in", "stockout risk".
+- Trigger phrases: "restock", "what's about to stock out", "days of supply", "reorder",
+  "low inventory", "how much to ship in", "stockout risk".
 
-## The framework. Rank by time-to-zero, not by units
+## The framework. One row per product, time to zero, your lead time
 
-1. **Out now** - `available = 0` (or, on the fallback source, `alert = out_of_stock`) with
-   recent velocity (real 30-day units sold, cross-checked against
-   `amazon_profit_by_sku_and_date` - see workflow) and little/no inbound. Losing sales
-   right now. Top priority.
-2. **Imminent** - inbound-aware days of supply
-   (`total_days_of_supply_including_units_from_open_shipments` on both sources - inventory
-   health's `days_of_supply` counts on-hand FBA stock only; or `alert = low_stock` on the
-   fallback) below your lead time (default 30d) - on-hand + inbound won't cover it in time.
-3. **Covered** - healthy days of supply (fallback: `alert = ""`). Skip.
-Order by severity, then fewest days of supply. Attach Amazon's recommended ship-in
-quantity and date - but sanity-check the quantity against real 30-day velocity first (an
-implausible reco is noise, not a signal).
+### 1. Judge a product, not a SKU
+
+One product (`child_asin`) often has several FBA SKUs: an old SKU, a second fee
+programme, Amazon "Grade and Resell" SKUs, found-inventory SKUs. Shoppers buy the
+product, and any SKU with new stock can fill the order. So:
+
+- Add up stock, inbound and units shipped over **all SKUs of the product** before you
+  judge it. A SKU at zero next to a sibling SKU with stock is not out of stock.
+- Leave out used stock: SKUs that start with `amzn.gr.` (Grade and Resell: returns Amazon
+  resells as used) and rows with `condition` = `Used`. They cannot be restocked.
+- Amazon prints a recommended quantity on every SKU of a product, also on SKUs that no
+  longer sell, and repeats the product's demand on each. Take Amazon's quantity from
+  **the SKU that shipped the most units in 30 days** (the selling SKU) only. Never add
+  recommendations up over SKUs.
+- **Stock** = `available` + units in transfer between Amazon warehouses
+  (`reserved_fc_transfer`): those come back on sale without a shipment.
+
+### 2. Pace
+
+- **30-day pace** = units shipped in the last 30 days (all SKUs of the product) / 30.
+  Buckets, order, the units to ship and the bucket totals use this pace, the same for
+  every product, so that the rows add up to the totals.
+- **Clean days.** The 30-day pace is wrong for a product when part of the month was not
+  normal. Two kinds of days are not normal:
+  - **days with nothing in stock** on its selling SKU (step 7): it could not sell its
+    demand;
+  - **days inside a deal** that is over before a shipment sent today lands (framework
+    5): it sold faster than it will when the shipment is on the shelf.
+  The clean days are the rest. Count everything here inside the 28 days that end two
+  days before the snapshot: the orders of the last two days have not all shipped. For a
+  listed product with at least 3 days that are not clean, the daily sales (step 8) show
+  how it sells on a clean day against the whole period: **clean factor** = (units on
+  the clean days / clean days) / (units on all 28 days / 28). The factor gives the row
+  an **adjusted quantity** (framework 4).
+  - The daily sales must be those of the same FBA SKUs that the stock and the 30-day
+    units come from (step 8 filters on them). Sales of a merchant-fulfilled offer on the
+    same product carry on while FBA is out of stock and would hide the gap. Where the
+    SKUs cannot be matched, give no adjusted quantity.
+  - The factor needs sales to compare: when the 28 days hold no unit at all (a product
+    can have shipped only in the last two days), it is undefined, not zero. Keep the
+    units to ship and write "no sales in the 28 comparison days - no adjusted
+    quantity".
+  - A deal that sold no unit at the deal price changed nothing: its days stay clean,
+    and the product does not count as "in a deal".
+  - When the clean days all lie before a deal, the factor also holds whatever the
+    season did since then (a winter product on its way up reads too low). The skill
+    cannot separate the two: say so below the tables when products are in a deal.
+  - At least 7 clean days are needed. Fewer: no adjusted quantity; write "only {n}
+    clean days" and that the units to ship are a minimum (the product was out of stock)
+    or an upper figure (it was in a deal), or simply uncertain when both apply.
+  - Fewer than 10 units on the clean days make a rough factor: print the adjusted
+    quantity with "rough: {u} units on its clean days". With units in the 28 days but
+    none on the clean days the adjusted quantity is 0: write "it sold only in the deal"
+    (or "only on days the snapshot shows no stock"), and leave the decision to the
+    seller.
+  - Count the days without stock only where the selling SKU shipped at least 80% of the
+    product's 30-day units (where two SKUs share the sales, one of them at zero does not
+    mean the product was out) and has a snapshot on at least 28 of the 30 days
+    (otherwise the history is incomplete: write "only {n} daily snapshots in the 30
+    days"). A day without a snapshot counts as in stock.
+- **Selling faster this week** = 7-day units / 7 is at least 1.5 times the 30-day pace,
+  with at least 7 units in the 7 days, on a product that has stock and is not in a
+  running deal (the deal note covers that case). It will run out sooner than the cover
+  says.
+- A product with no unit shipped in 30 days is not a restock question. Leave it out.
+
+### 3. Buckets
+
+`L` is the lead time in days: from the day you ship until the units can be sold at
+Amazon. Take it from the user; default 30.
+
+**Cover** = (stock + inbound) / 30-day pace, in days. **Gap** = `L` - cover: the days
+without stock before a shipment sent today can be sold. **Units at risk** = 30-day pace x
+gap: the sales lost in the gap. Decide the bucket in whole numbers, so that a cover of
+exactly `L` does not fall on the wrong side: cover is under `L` when 30 x (stock +
+inbound) < `L` x 30-day units. Print days as whole days, rounded down.
+
+1. **Out now** - `available` is 0 over all SKUs and the product shipped units in the last
+   30 days. It is losing sales today. Say what is on the way: nothing, or the inbound and
+   the days it covers, or units in transfer.
+2. **Runs out before a new shipment arrives** - `available` above 0 and cover under `L`.
+   A shipment sent today is already late.
+3. **Ship soon** - cover from `L` to `L` + 14 days, both included. Ship by today +
+   (cover - `L`) days, rounded down.
+4. **Covered** - everything else. Not listed.
+
+Order: out now by units to ship, largest first (a product whose inbound already covers
+it needs no new shipment and goes last); the second bucket by units at risk, largest
+first; ship soon by 30-day units, largest first. Break a tie by 30-day units, then by
+ASIN. List at most 10 products in each of the first two buckets and 5 in the third
+(more when the user asks). Print for every bucket how many products it holds, the units
+they shipped in 30 days and the units to ship for all of them together, so that the rows
+not listed are still counted; for out now, also how many need no new shipment. Say so
+when most of a bucket ships under 5 units a month. The ship-soon bucket is always "at
+least": products that Amazon puts above twice the lead time are not checked.
+
+Inbound counts as stock although it is not on the shelf yet. When a listed product of
+the second or third list has stock for fewer than 7 days and inbound on top, write "on
+hand for {d} days - check when the inbound lands".
+
+### 4. How many
+
+- **Units to ship** = 30-day pace x (`L` + `C`) - stock - inbound, rounded up, never
+  below 0. `C` is the cover you want left when the shipment lands; default 30 days, the
+  user may change it. Print the formula once with the user's numbers.
+- **Adjusted quantity** = the same formula at the 30-day pace x the clean factor
+  (framework 2), rounded up, never below 0. The note gives the reason and the factor,
+  so that the number can be checked: "nothing available on {z} days: x{f} of the 30-day
+  pace on its {n} clean days", "in a deal until {date}: x{f} ...", or both reasons.
+  The days without stock in the note are those inside the 28 comparison days. Where a
+  row has an adjusted quantity, plan on it - except an adjusted 0 with "it sold only in
+  the deal", which is the seller's call. When the cover at the adjusted pace puts the
+  row in a later bucket, say so, and it replaces the row's list and ship-by date for
+  planning: "at that pace the cover is {d} days: ship soon, by {date}" or "...:
+  covered for now - the adjusted quantity can wait". The row stays where the 30-day pace put it, so
+  that lists and totals add up. The bucket totals do not hold the adjustments: they run
+  low where products were out of stock and high where they were in a deal - and the
+  products not listed were not checked for either.
+- **Amazon's quantity** stands next to it (framework 1), without a mark: it is Amazon's
+  own forecast. Below the tables, tell the user to check a product's forecast in Seller
+  Central before shipping the larger number where the two are far apart. A
+  recommendation made before an inbound shipment was created can be stale.
+- **Inbound that has not shipped.** `inbound_working` counts units in a shipment plan
+  that has not left yet. They are part of inbound; print "of which {n} not shipped yet"
+  when it is above 0, because they will arrive later than the rest.
+
+### 5. Promotions on the listed products
+
+When the promotion tables are enabled, look up the deals of the listed products that ran
+inside the 30 days up to the snapshot, run now or are coming (step 8).
+
+- A running deal on a product that is out of stock is mostly wasted: note "in a deal
+  until {date} while out of stock" on the out-now rows (also when the deal has sold
+  nothing so far; "more days at the deal's pace" does not apply to them).
+- The 30 days behind the pace hold the deal's sales, and they still do after the deal
+  has ended. When the deal has ended, or ends before today + `L`, a shipment sent today
+  lands after it: the deal's days are not clean days (framework 2). They run from its
+  first local day to its last, or to the snapshot day. Note "in a deal until {date}",
+  or "was in a deal until {date}" for one that has ended. A deal that still runs keeps
+  selling at its own pace until it ends: add "{d} more days at the deal's pace".
+- A deal that starts after today changes nothing in the 30 days: note "a deal starts on
+  {date} - it will sell faster than the pace".
+- Never take the sales outside a deal as the 30-day units minus the units at the deal
+  price: a product also sells at the full price on deal days.
+
+Skip this silently when the tables are disabled; the daily sales are still needed for
+the days without stock.
 
 ## Configuration
 
 - MCP base: `https://mcp.datadoe.com/mcp/v1`
-- **Primary source:** `FBA Inventory Health` (`amazon_fba_inventory_health`) **[premium]**.
-  Daily snapshot - use the latest `date`. Columns: `sku`, `child_asin`, `product_name`,
-  `available`, `inbound_quantity`, `days_of_supply`,
-  `total_days_of_supply_including_units_from_open_shipments`, `units_shipped_t30`,
-  `units_shipped_t7`, `recommended_ship_in_quantity`, `recommended_ship_in_date`,
-  `fba_inventory_level_health_status`. Not available in MX. `days_of_supply` is on-hand
-  FBA stock at recent sales; `total_days_of_supply_including_units_from_open_shipments`
-  adds inbound (one UK snapshot: higher on 611 of 802 SKUs with inbound, equal where
-  inbound is 0) - rank "imminent" on the second.
-  **Emptiness guard:** Premium note: a premium export costs 5 AI Tokens instead of 2 - nothing else differs, and the table is part of the always-on default dataset, so it is never disabled. A 0-row export means no data in the window or an initial load still in progress - say which, and switch to the fallback below ("FBA Inventory Health returned no rows (initial load may still be running) - using Amazon's restock recommendations instead"); never render zeros.
-  Never render an empty catalog as "nothing to restock".
-- **Fallback source:** `FBA Restock Recommendations` (`amazon_fba_restock_recommendations`,
-  free) - Amazon's own restock report. Per SKU/day: `sku`, `child_asin`, `product_name`,
-  `available`, `inbound` (+ `working` / `shipped` / `receiving` breakdown),
-  `days_of_supply_at_amazon_fulfillment_network`,
-  `total_days_of_supply_including_units_from_open_shipments`, `alert` (`out_of_stock` /
-  `low_stock` / `""`), `recommended_replenishment_qty`, `recommended_ship_date`,
-  `units_sold_last_30_days`, `country`. **Multi-country table:** one UK seller returned
-  DE/ES/FR/GB/IT rows (43k rows a day); always filter `country = <marketplace code, e.g.
-  GB>` or a UK ranking is built from other marketplaces' rows and holds zero GB rows.
-  Multiple dates per SKU - collapse to `MAX(date)`; state the snapshot date and flag
-  staleness (the data can lag - 13 days behind in an October run).
-- **Velocity cross-check:** `Profit by SKU & Date` (`amazon_profit_by_sku_and_date`)
-  [premium] - real units sold per SKU and per `child_asin`. Velocity columns on the
-  inventory tables are **per SKU**: sibling SKUs of a live ASIN read 0 (1,694 "dead" SKUs
-  on selling ASINs in testing), so judge velocity per `child_asin` (sum this table over
-  the ASIN's SKUs) before calling a SKU dead or a recommendation "noise". If this table is
-  unavailable (0 rows), sum `units_shipped_t30` / `units_sold_last_30_days` across the ASIN's
-  SKUs and say the velocity is Amazon's own figure.
-- Lead time / target cover: ask the user (default 30 days).
+- **Primary source:** `FBA Inventory Health` (`amazon_fba_inventory_health`)
+  **[premium]**, one row per SKU and day. Columns used: `date`,
+  `marketplace_country_code`, `sku`, `child_asin`, `product_name`, `condition`,
+  `available`, `inbound_quantity` (working + shipped + received), `inbound_working`,
+  `reserved_fc_transfer`, `units_shipped_t30`, `units_shipped_t7`,
+  `total_days_of_supply_including_units_from_open_shipments`,
+  `recommended_ship_in_quantity`. `requiresDatePeriod: true`. The planning columns are
+  not available in MX. A premium export costs 5 AI Tokens instead of 2; nothing else
+  differs.
+  - `days_of_supply` and `total_days_of_supply_including_units_from_open_shipments` can
+    hold the same value. Do not print one as "on hand" and the other as "with inbound".
+  - Amazon's days of supply follow its own forecast and can jump from one day to the
+    next. They pre-select the products to check; the cover printed is the skill's own.
+  - `units_shipped_t30` is empty on SKUs with no sales; a sum skips empty values.
+  - Do not print Amazon's recommended ship date: it ignores the user's lead time and is
+    often already past.
+- **Fallback source:** `FBA Restock Recommendations`
+  (`amazon_fba_restock_recommendations`), Amazon's own restock report, one row per SKU,
+  day and **country**: always filter `country` to the marketplace code, or the list is
+  built from other marketplaces. Column map: `inbound` for `inbound_quantity`, `working`
+  for `inbound_working`, `fc_transfer` for `reserved_fc_transfer`,
+  `units_sold_last_30_days` for `units_shipped_t30`, `recommended_replenishment_qty` for
+  Amazon's quantity; `available`, `sku`, `child_asin`, `product_name`, `condition` and
+  `total_days_of_supply_including_units_from_open_shipments` keep their names. It has no
+  7-day units: leave the `sold7` sum and the "selling faster" note out and say so. Its newest date can be days behind: print
+  it. Its `condition` holds `New`, `Unknown` and four used grades that all start with
+  `Used` (`UsedLikeNew`, `UsedVeryGood`, `UsedGood`, `UsedAcceptable`), and it can be
+  empty.
+- **Promotions (optional):** `Promotion Performance` (`amazon_promotion_performance`):
+  `asin`, `promotion_name`, `promotion_type`, `promotion_status`, `start_date_time`,
+  `end_date_time` (both UTC), `product_units_sold` (units at the deal price). Not in the
+  default dataset; it can be disabled.
+- **Daily sales (for the clean factor):** `Profit by SKU & Date`
+  (`amazon_profit_by_sku_and_date`) **[premium]**: `date` (the day of the order,
+  marketplace-local), `child_asin`, `total_units_sold`. `requiresDatePeriod: true`.
+- Resolve each source with `exports_sources_get`, passing the table name as `query` and
+  `pageSize: 1`. The column names above were checked against the schema: call
+  `exports_source_get` only when an export is rejected for a column.
+- **Empty is not "nothing to restock".** A probe with no row for the marketplace means
+  the table has no data yet (an initial load can still be running): switch to the
+  fallback and say "FBA Inventory Health returned no rows - using Amazon's restock
+  recommendations". Never print an empty catalogue as good news.
+- **Every export is grouped and small.** A snapshot holds one row per SKU, often
+  thousands, and does not fit a chat. The steps below let the server add up the SKUs of
+  each product and return only the products that matter: the snapshot exports return
+  at most 200 short rows, the two daily exports of steps 7 and 8 a few hundred. Do not
+  pull the whole snapshot.
+- Call details: `outputType: "CSV"`; `columns` = the `groupBy` fields and the aliases;
+  an `in` value is a comma-separated list; a date value is `YYYY-MM-DD`; an aggregation
+  alias must differ from every column name of the table it runs on, or the export is
+  rejected (`inbound` is a column of the fallback table, so the sum of inbound is
+  `inbound_sum` on both sources). Create one or two exports at a time and
+  retry once when the server answers that it is rate-limiting. The seller list can name
+  the United Kingdom `UK` while table columns use `GB`: the probe in step 3 shows which.
+- The low-cover export returns up to 200 rows that need a cover each, and the clean
+  factor needs sums over a few hundred daily rows. Use a code or calculation tool for
+  that arithmetic (steps 5 and 9) when the client has one.
+- Inputs: lead time `L` (default 30 days) and cover after arrival `C` (default 30 days).
 
 ## Step-by-step workflow (MCP-native)
 
-1. `sellers_and_vendors_list` -> pick the seller.
-2. `exports_sources_get` (query "inventory health") -> check `amazon_fba_inventory_health`.
-   If `enabled: false`, go straight to the fallback (step 3b). Also check
-   `amazon_fba_restock_recommendations` and `amazon_profit_by_sku_and_date`.
-3. **a) Primary:** two exports on `amazon_fba_inventory_health`.
-   - **Availability and snapshot date:** `from` = 3 days ago, `to` = today, `groupBy
-     ["date", "marketplace_country_code"]`, `count(sku)`, no other filter. **No row for
-     the marketplace means the table is unavailable** (no data yet, or an initial load
-     still running) - run step 3b and say so. Otherwise the newest `date` is the snapshot
-     (a 2-day range would return two snapshots).
-   - **The whole snapshot, classified in code:** `from` = `to` = that date, filter
-     `marketplace_country_code = <marketplace>`, columns as listed above, CSV `limit
-     5000`, `orderByColumn sku`, and page with `skip` until a page returns fewer rows
-     (**row caps are 1,000 JSON / 5,000 CSV**; 7,560 rows = 2 pages on one UK account).
-     Do not pre-filter to "urgent" rows: a null `days_of_supply` (2,009 of those 7,560
-     rows) or a zero-stock row whose Amazon velocity reads 0 can still be selling per the
-     profit table, and step 5 can only rescue rows it receives - 25 SKUs on that snapshot
-     had under 30 days of cover by real sales and a null `days_of_supply`. A pre-filtered
-     export that returns 0 rows also proves nothing about the table being available. Do
-     not rely on sorting either: `days_of_supply ASC` puts the nulls first and a
-     truncated page keeps the wrong rows.
-   **b) Fallback:** `exports_create` for `amazon_fba_restock_recommendations`, columns:
-   `sku`, `child_asin`, `product_name`, `available`, `inbound`,
-   `days_of_supply_at_amazon_fulfillment_network`,
-   `total_days_of_supply_including_units_from_open_shipments`, `alert`,
-   `recommended_replenishment_qty`, `recommended_ship_date`, `units_sold_last_30_days`,
-   `date`, `country`, **filter `country = <marketplace code>`** (multi-country table - see
-   Configuration). Same row caps; pull `alert IN (out_of_stock, low_stock)` server-side,
-   then sort by `alert` (out_of_stock first) and
-   `total_days_of_supply_including_units_from_open_shipments` ASC; paginate if a page
-   fills to `limit`. Say in the output which source the ranking is built on, and that
-   this fallback trusts Amazon's `alert`: a SKU Amazon marks healthy never reaches the
-   velocity cross-check.
-4. Poll, download, and **collapse to `MAX(date)` per SKU** so you rank on one current
-   snapshot, not a mix of days. Record the snapshot date; flag the lag if it is well behind
-   today.
-5. **Velocity cross-check + fallbacks + sanity checks:**
-   - **Cross-check velocity (important):** pull real 30-day units sold per SKU from
-     `amazon_profit_by_sku_and_date` (a premium export, 5 AI Tokens) and use it as the authoritative
-     velocity. Treat a SKU as dead stock (skip it) only if BOTH sources show no sales; if
-     the profit table shows sales, it is a live seller regardless of the inventory table.
-   - If the inbound-inclusive days of supply is null/empty (slow, new or near-zero SKUs
-     often are): daily velocity = (cross-checked 30-day units, else `units_shipped_t30`) /
-     30; on-hand days = `available / velocity`; inbound-inclusive days = `(available +
-     inbound_quantity) / velocity` (fallback: `inbound`). Bucket on the inbound-inclusive
-     days like every other row and show the on-hand days beside it - inbound that lands
-     after the on-hand days run out still leaves a gap.
-   - A zero-stock row whose Amazon velocity reads 0 but whose profit-table sales are real
-     is **out now** (when inbound is little or none), not dead stock.
-   - Sanity-check the recommended quantity (`recommended_ship_in_quantity` /
-     `recommended_replenishment_qty`) against the cross-checked velocity: a reco wildly out
-     of line (e.g. a 4,000-unit reco on a SKU truly selling ~0) is flagged "verify against
-     sales velocity", not surfaced blindly. Prefer Amazon's reco when it is plausible.
-   - The recommended ship date is frequently null (100% null on the fallback source in
-     testing) - render "n/a", do not imply a date exists; drive urgency off days-of-supply.
-6. Bucket (out-now / imminent / covered / dead) on the inbound-inclusive days of supply
-   (step 5 computes it when null) plus `alert` on the fallback source, and render most
-   urgent first.
+Six to eight exports, each grouped. `{used-stock filters}` below means two row filters:
+`sku` `doesNotBeginWith` `amzn.gr.`, and on the primary source `condition` `!=` `Used`
+(its values are `New`, `Used` or an empty text, and the empty ones stay), on the
+fallback source `condition` `doesNotBeginWith` `Used` (there a value can be missing
+altogether, and a missing value is dropped by the filter: step 3 checks for that and
+then switches the condition filter off).
+
+1. `sellers_and_vendors_list` -> pick the seller and its marketplace.
+2. `exports_sources_get` for `amazon_fba_inventory_health`. Not `enabled`, or
+   `accessAllowed: false` -> run the same steps on the fallback source and say so.
+3. **Snapshot probe.** `from` = 3 days ago, `to` = today, `groupBy: ["date",
+   "marketplace_country_code"]`, `count(sku)` as `sku_rows`, `count(condition)` as
+   `cond_rows`, `limit: 50`. No row for the marketplace -> fallback. The newest `date` is
+   the snapshot; print it, and say so when it is more than 2 days old. Steps 4 to 6 use
+   `from` = `to` = that date and the filter `marketplace_country_code` = the
+   marketplace. No row on the fallback either: say that neither source has data for the
+   marketplace, and stop.
+   - **Missing condition values.** `cond_rows` below `sku_rows` on the snapshot day
+     means some rows have no condition value at all (the fallback table allows that).
+     A condition filter would drop every one of them, and with them the stock of a
+     product whose other SKU is at zero. Without a condition filter, used stock on a
+     SKU without the `amzn.gr.` prefix would count as stock and could hide a product
+     that is out of new stock. So, in that case, find the used stock first and take it
+     out before any product is judged:
+     - **3b. Used stock without the prefix.** The snapshot day and the marketplace,
+       `sku` `doesNotBeginWith` `amzn.gr.`, `condition` `beginsWith` `Used`;
+       `groupBy: ["child_asin"]`, and every quantity that steps 4 and 5 use:
+       `sum(available)` as `avail_used`, `sum(inbound_quantity)` as `inbound_used`
+       (`inbound` on the fallback), `sum(inbound_working)` as `planned_used`
+       (`working`), `sum(reserved_fc_transfer)` as `transfer_used` (`fc_transfer`),
+       `sum(units_shipped_t30)` as `sold30_used` (`units_sold_last_30_days`) and, on
+       the primary source, `sum(units_shipped_t7)` as `sold7_used`; `having` with
+       combinator `or`: `avail_used > 0`, `inbound_used > 0`, `transfer_used > 0`,
+       `sold30_used > 0`; `limit: 200`. A full page: read the next with `skip` until a
+       page comes back short. Every page is one batch of at most 200 products.
+     - No row: no used stock hides anywhere. Run steps 4 and 5 with **no condition
+       filter** (the SKU prefix still leaves out Grade and Resell stock): nothing is
+       lost and nothing used is counted.
+     - Rows: steps 4 and 5 run with no condition filter and with `child_asin` `notIn`
+       the products of 3b (all batches; a list above 700 goes into several `notIn`
+       rules). The 3b products are read back batch by batch - the export of step 5 with
+       `child_asin` `in` one batch and no `having`, one export per batch - and every
+       batch is read before any cover is worked out. Subtract each product's 3b numbers
+       from its row, quantity by quantity, then judge it on what is left: no new stock
+       and new sales in 30 days is out now, whatever its used stock; otherwise its cover
+       sorts it into a bucket directly, without the pre-selection by Amazon's days of
+       supply (which can hold the used SKUs).
+     Say in the report how many SKU rows have no condition.
+4. **Out now.** `{used-stock filters}`, `groupBy: ["child_asin"]`, `sum(available)` as
+   `avail`, `sum(inbound_quantity)` as `inbound_sum`, `sum(inbound_working)` as
+   `inbound_planned`, `sum(reserved_fc_transfer)` as `in_transfer`,
+   `sum(units_shipped_t30)` as `sold30`, `sum(units_shipped_t7)` as `sold7`; `having`
+   `avail = 0` and `sold30 > 0`; ordered by `sold30` descending, `limit: 200`. One row
+   per product that is out of stock and was selling. Fewer rows than the limit: all are
+   read, and the list, the count and the totals are complete. Exactly 200 rows: two
+   separate questions.
+   - **Is the top of the list final?** The rows come in the order of their sales, but
+     the list is ranked by units to ship, and a product further down with nothing
+     inbound can need more than one near the top whose inbound covers it. A product not
+     read ships at most the last row's `sold30` in 30 days, so it needs at most that x
+     (`L` + `C`) / 30. The top 10 are final when the 10th of them needs at least that
+     much; if not, read the next page (`skip: 200`), up to 3 pages, and after that say
+     that products with a larger need may be missing.
+   - **Are the count and the totals complete?** No - not while a page came back full,
+     whatever the answer to the first question. Print the bucket's products, units and
+     units to ship as "at least", and do not write that every out-of-stock product was
+     checked. The number of products is the `rowCount` of the same export created with
+     `limit: 5000`: read it from the export's status, do not download the rows. Below
+     5,000 it is exact; at 5,000 it is "at least 5,000". The unit totals stay "at
+     least" unless every page is read.
+5. **Low cover.** The export of step 4 with
+   `max(total_days_of_supply_including_units_from_open_shipments)` as `amz_days` added;
+   `having` `avail > 0`, `sold30 > 0` and `amz_days <` 2 x `L`; ordered by `sold30`
+   descending, `limit: 200`. These are the products Amazon puts under twice the lead
+   time, largest sellers first. Work out the cover of each row at the 30-day pace and
+   sort it into bucket 2, bucket 3 or covered (framework 3); add up each bucket's
+   products, 30-day units and units to ship. These two buckets are always "at least"
+   (the pre-selection is Amazon's, and 200 rows can cut it): name the 30-day units of
+   the last row when the page is full. The units at risk of a product not read are at
+   most the last row's `sold30` x `L` / 30: the top 10 of bucket 2 are final when the
+   10th has at least that; if not, read the next page as in step 4. Then pick the rows
+   to list: 10 + 10 + 5.
+6. **Names, SKUs and Amazon's quantity** for the listed products. Filters: the
+   marketplace, `sku` `doesNotBeginWith` `amzn.gr.` and `child_asin` `in` those
+   products - **no condition filter here**, so that a SKU with no condition value is
+   not lost; `groupBy: ["child_asin", "sku", "condition", "product_name"]`,
+   `sum(available)` as `avail`, `sum(inbound_quantity)` as `inbound_sum`,
+   `sum(reserved_fc_transfer)` as `in_transfer`, `sum(units_shipped_t30)` as `sold30`,
+   `max(recommended_ship_in_quantity)` as `amz_qty`; `having` with combinator `or`:
+   `sold30 > 0`, `avail > 0`, `inbound_sum > 0` (it drops the SKUs with nothing on
+   them); `limit: 150`. Exactly 150 rows: read the next page (`skip: 150`) until a page
+   comes back short - the SKU list of a product has to be complete before its selling
+   SKU, its eligible SKUs and its daily sales (step 8) are taken from it. A product
+   whose rows are not all read gets no adjusted quantity. Leave out the rows whose
+   condition is used (`Used`, or a value that starts with `Used` on the fallback). The
+   rows that remain are the product's **eligible SKUs**. The selling SKU is the one
+   with the largest `sold30`: take Amazon's quantity from that row and ship to that
+   SKU. Shorten `product_name` to brand, product and size.
+7. **Days seen and days without stock** for the selling SKUs (framework 2). `from` = the
+   snapshot date minus 29 days, `to` = the snapshot date; the marketplace filter and
+   `sku` `in` the selling SKUs of step 6 (not the products: a product can have dozens of
+   spare SKUs at zero all month, and they would crowd the selling SKU out of a limited
+   list). Two exports:
+   - `groupBy: ["child_asin", "sku"]`, `count(date)` as `days_seen`, `limit: 100` - the
+     daily snapshots the SKU has in the 30 days;
+   - with `available` `=` `0` added: `groupBy: ["child_asin", "sku", "date"]`,
+     `count(sku)` as `n_rows`, ordered by `sku`, `limit: 1000` - one row per day
+     without stock. No row for a SKU means it was never at zero.
+   A SKU with a comma in its name cannot go into an `in` list: leave it out and count no
+   days without stock for that product.
+8. **Deals and daily sales:**
+   - **the deals** (only when `amazon_promotion_performance` is enabled): filters `asin`
+     `in` the listed products, `end_date_time >=` the snapshot date minus 29 days,
+     `promotion_status != CANCELED`; `groupBy: ["asin", "promotion_name",
+     "promotion_type", "start_date_time", "end_date_time"]`,
+     `sum(product_units_sold)` as `deal_units`; `limit: 100`. This table has no `date`
+     column: send no `from` / `to`. An end before today is a deal that has ended inside
+     the 30 days; a start after today is a coming deal. The times are UTC: a start at
+     23:00 UTC in a UTC+1 marketplace is the next local day.
+   - **daily sales** of the listed products that have at least 3 days that are not
+     clean (days without stock, days of a deal): `amazon_profit_by_sku_and_date`,
+     `from` = the snapshot date minus 29 days, `to` = the snapshot date, filter `sku`
+     `in` the eligible SKUs of those products from step 6 - the same FBA SKUs the
+     stock and the 30-day units come from, not the whole product, which can also sell
+     through a merchant-fulfilled offer; `groupBy: ["child_asin", "date"]`,
+     `sum(total_units_sold)` as `units_day`; `having` `units_day > 0`; ordered by
+     `child_asin`, `limit: 1000`. A day with no row sold nothing. A product with an
+     eligible SKU that cannot go into the list (a comma in its name) gets no adjusted
+     quantity. Table disabled or not accessible: no adjusted quantities; say that the
+     30-day pace could not be checked against the daily sales.
+9. **Clean factor, adjusted quantities and notes** for the listed products (framework
+   2, 4 and 5), then the report. A row can carry several notes: join them with a
+   semicolon.
+
+The fallback source runs the same steps with its own column names (Configuration) and
+`country` in place of `marketplace_country_code`.
 
 ## Output format
 
+Start with the snapshot date, the source, and the lead time and cover used.
+
 ```
-Restock Priority - {marketplace} - snapshot {date} {STALE if lagging}   (lead time {L}d)
-Source: FBA Inventory Health | FBA Restock Recommendations (fallback - inventory health returned no rows)
+Restock Priority - {seller} ({marketplace}) - snapshot {date}{, {n} days old}
+Source: FBA Inventory Health | FBA Restock Recommendations (fallback - {reason})
+Lead time {L} days, cover after arrival {C} days: units to ship = 30-day pace x {L + C} days - stock - inbound.
+{x} products are out of stock and were selling. At least {y} more run out before a shipment sent today can be sold ({today + L}). At least {z} more need a shipment within 14 days.
+The first two lists are urgent: no stock today, or none left before a shipment sent today can be sold. The third list has a ship-by date per product.
+{k} of the {m} listed products are or were in a deal in the last 30 days that sold units and is over before {today + L}: their 30-day sales hold the deal. Plan on the adjusted quantity where a row has one. The second and third list and their totals run high while such deals are inside the 30 days: the products not listed were not checked for them.
 
-OUT NOW (available 0 / alert out_of_stock, losing sales)
-SKU                     avail  30d-sold  inbound  ship-in   by        qty check
-{sku}                   0      {n}       {n}      {qty}     {date}    ok / verify vs velocity
+OUT NOW - no stock on any SKU: {x} products{ ({r} of them read)}, {at least }{u} units shipped in 30 days, {at least }{s} units to ship together; {n} of them need no new shipment (inbound or units in transfer cover them){. Most of them ship under 5 units a month ({k} of {x})}
+  product ({asin})   30-day units   on the way                                           units to ship   adjusted   Amazon's qty   ship to SKU   notes
+  {name}             {n}            {nothing | {n} inbound{ + {n} in transfer}, covers {d} days}   {n}     {n | -}    {n}            {sku}         {nothing available on {z} days: x{f} of the 30-day pace on its {n} clean days | in a deal until {date} while out of stock | only {n} clean days - the units to ship are {a minimum | an upper figure | uncertain} | rough: {u} units on its clean days | it sold only in the deal - your call | no sales in the 28 comparison days - no adjusted quantity | only {n} daily snapshots in the 30 days}
+  ...
+  {+ {k} more products}
 
-IMMINENT (DoS incl. inbound < {L}d / alert low_stock)
-SKU                     avail  DoS   30d-sold  inbound  ship-in  by
-{sku}                   {n}    {d}   {n}       {n}      {qty}    {date}
+RUNS OUT BEFORE A NEW SHIPMENT ARRIVES - cover under {L} days: at least {y} products, {u} units shipped in 30 days, about {s} units to ship together
+  product ({asin})   stock + inbound   30-day units   cover   units at risk   units to ship   adjusted   Amazon's qty   ship to SKU   notes
+  {name}             {n} + {n}         {n}            {d} d   {n}             {n}             {n | -}    {n}            {sku}         {{in | was in} a deal until {date}{, {d} more days at the deal's pace}: x{f} of the 30-day pace on its {n} clean days | nothing available on {z} days: x{f} ... | at that pace the cover is {d} days: {ship soon, by {date} | covered for now - the adjusted quantity can wait} | a deal starts on {date} - it will sell faster than the pace | selling faster this week | of which {n} inbound not shipped yet | on hand for {d} days - check when the inbound lands}
+  ...
+  {+ {k} more products}
 
-Covered: {count} SKUs OK. Dead stock (no sales): {count} - not restocked.
+SHIP SOON - cover {L} to {L + 14} days: at least {z} products, {u} units shipped in 30 days, about {s} units to ship together
+  product ({asin})   stock + inbound   30-day units   cover   ship by   units to ship   adjusted   Amazon's qty   ship to SKU   notes
+  {name}             {n} + {n}         {n}            {d} d   {date}    {n}             {n | -}    {n}            {sku}         {as above}
+  ...
+  {+ {k} more products}
+
+Adjusted = the same formula at the pace of the product's clean days (days with stock, outside a deal that is over before the shipment lands); the note gives the factor, and "rough" means it rests on fewer than 10 units. Where a row has an adjusted quantity, plan on it (an adjusted 0 for a product that sold only in its deal is your call); a note "covered for now" or "ship soon" replaces the row's list and date. Totals use the 30-day pace and do not hold the adjustments.{ For products in a deal the clean days lie before it: a seasonal rise or fall since then is inside the factor.}
+Amazon's qty is Amazon's own forecast for the selling SKU: where it is far from the quantity to plan on, check the product's forecast in Seller Central before shipping the larger number.
+Checked: {every product that is out of stock | the {r} out-of-stock products with the most sales, of {x}}, and the {n} best sellers that Amazon puts under {2L} days of supply{ (cut at 200; the last one shipped {n} units in 30 days)}. Products that Amazon puts above {2L} days are not checked, so the second and third list are "at least". Used-condition SKUs left out.
 ```
+
+Leave out a bucket that is empty with one line ("No product is out of stock"). Print the
+deal line under the header only when a listed product is in such a deal. No token-cost
+lines.
+
+## Scheduled runs
+
+The same steps. Ask for the lead time once and keep it in the task. A short message
+holds the three counts and the first 5 rows of "out now" and of "runs out before a new
+shipment arrives", each with its units to ship and the SKU to ship to. When both
+buckets are empty, say so in one line.
 
 ## Worked example (illustrative)
 
-SKU A: `available` 1, ~24 units sold in the last 30d (~0.8/day), only 18 inbound, DoS
-~0. Amazon's recommended quantity ~86 by a date this week -> OUT-NOW priority; ship the
-recommended quantity.
-SKU B: `available` 0, sells ~65/mo, but ~418 already inbound -> covered soon, lower
-priority despite being at zero (inbound covers it).
-SKU C: out of stock, 0 units sold in 30 days on both sources, recommended quantity 4357 ->
-implausible for a non-seller; flag "verify against sales velocity", don't ship it.
-That inbound-aware ranking is the point: at-zero alone isn't the trigger; at-zero
-*without enough inbound* is - and Amazon's reco is a suggestion to sanity-check, not gospel.
+Lead time 30 days, cover 30 days.
+
+- Product A has three SKUs. Two are at zero and Amazon recommends 3,500 units on one of
+  them. The third holds 4,000 units and ships 2,400 a month. Added up, the product has
+  50 days of cover: **covered**, not listed, and the 3,500 is not a quantity to ship.
+- Product B: no stock on any SKU, 240 units shipped in 30 days, 300 inbound. **Out
+  now**; the inbound covers 37 days. Units to ship: 8 x 60 - 300 = 180. Its selling SKU
+  had nothing available on 6 of the 28 days, so 22 days are clean. The daily sales show
+  220 units on those 22 days (10 a day) and 224 on all 28 (8 a day): clean factor 1.25,
+  adjusted quantity 8 x 1.25 x 60 - 300 = 300. Amazon shows 0, because it counts the
+  inbound.
+- Product C: 45 in stock, nothing inbound, 90 units in 30 days: cover 15 days, gap 15
+  days, 45 units at risk. Units to ship: 3 x 60 - 45 = 135; Amazon recommends 110. No
+  day without stock, no deal: no adjusted quantity.
+- Product D: 100 in stock, 150 units in 30 days: cover 20 days, 50 units at risk, units
+  to ship 5 x 60 - 100 = 200. It is in a deal that has run for 10 days, the snapshot
+  day included, and ends in 5: 8 of those days fall inside the 28-day period, and 20
+  days are clean. The daily sales show 60 units on
+  the clean days (3 a day) and 140 on all 28 (5 a day): clean factor 0.6, adjusted
+  quantity 5 x 0.6 x 60 - 100 = 80. The shipment lands after the deal: plan on 80, and
+  note "5 more days at the deal's pace". At 3 a day the 100 in stock cover 33 days:
+  "at that pace the cover is 33 days: ship soon, by {today + 3 days}".
+- Product E: 200 in stock, 150 units in 30 days: cover 40 days. **Ship soon**: ship
+  within 10 days. Units to ship: 5 x 60 - 200 = 100.
+- Product F: no stock, 2 units in 30 days. It is counted in the bucket line, not listed.
 
 ## Quality self-check
 
-- Did I check availability with an unfiltered count on the latest dates (never with a
-  filtered export), and fall back to `amazon_fba_restock_recommendations` (saying so)
-  instead of reporting "nothing to restock"?
-- Did I collapse to `MAX(date)` per SKU and state the snapshot date (and flag it if stale)?
-- Did I rank on the inbound-inclusive days of supply
-  (`total_days_of_supply_including_units_from_open_shipments`, not `days_of_supply`)?
-- Did I fall back to 30-day velocity when days-of-supply is null, and skip no-velocity
-  dead stock (don't restock a non-seller)?
-- Did I sanity-check the recommended quantity against velocity before surfacing it?
-- Did I judge velocity per `child_asin` (sibling SKUs of a live ASIN read 0 on their own)
-  using `amazon_profit_by_sku_and_date` where available?
-- Did I filter `country` / `marketplace_country_code` to the seller's marketplace?
-- Did I page through the whole latest snapshot and classify in code, so null-DoS and
-  zero-velocity rows reach the velocity cross-check?
+- Is every row a product, with stock, inbound and units added up over its SKUs?
+- Did I leave out `amzn.gr.` SKUs and used-condition rows?
+- Is Amazon's quantity taken from the selling SKU only, and never added up?
+- Did I state the snapshot date, and use the fallback (saying so) when the probe had no
+  row?
+- Did I filter the marketplace (`country` on the fallback)?
+- Did I bucket, rank and size on the 30-day pace, rank out now by units to ship and the
+  second bucket by units at risk, not by the shortest cover?
+- Does every bucket line carry its products, 30-day units and units to ship, so that
+  the rows not listed are counted?
+- Did I take the clean factor from the daily sales, over the 28 days that end two days
+  before the snapshot, with days without stock and deal days left out of the clean
+  days?
+- Is there an adjusted quantity only where at least 3 days are not clean and at least 7
+  are, and did I count days without stock only for a selling SKU that ships 80% or more
+  of the product and has its snapshots?
+- Did I look up the deals that ended inside the 30 days, not only the running ones?
+- When the out-now export came back full: did I check the top of the list with the
+  bound, and print the count and the totals as "at least" either way?
+- Did the daily sales come from the same eligible FBA SKUs as the stock, and did I give
+  no adjusted quantity where the 28 days hold no sales?
+- With condition values missing: did I find the used stock without the prefix first
+  (3b), take it out of its products before judging them, and run steps 4 and 5 without
+  a condition filter?
+- Is the SKU list of step 6 complete (paged when 150 rows came back) before I took
+  selling SKUs and eligible SKUs from it?
+- Do the units to ship of the listed rows use the same pace as the bucket totals?
+- Did I decide the buckets in whole numbers, so that a cover of exactly the lead time is
+  "ship soon"?
+- Did I use the user's lead time in the buckets, the ship-by date and the quantity?
+- Does every adjusted quantity carry its reason and its factor, and a "rough" mark
+  where the clean days hold fewer than 10 units?
+- Is every export grouped, with no whole-snapshot pull?
 
 ## Common mistakes
 
-- Reporting "nothing to restock" because `amazon_fba_inventory_health` came back empty -
-  the initial load may not have finished; use the fallback source and say so.
-- Flagging at-zero SKUs that already have plenty inbound.
-- Recommending restock for dead stock (0 sales) - that's a removal decision, not restock.
-- Ignoring null days-of-supply instead of computing from velocity.
-- Using a stale snapshot (multiple dates) - collapse to MAX(date), and flag the lag.
-- Trusting one sorted page on a multi-thousand-SKU catalog - caps are 1,000 JSON / 5,000
-  CSV and `days_of_supply ASC` sorts nulls first; page through the whole snapshot.
-- Pre-filtering the inventory export to "urgent" rows - null-DoS and zero-velocity rows
-  never reach the velocity cross-check, and an empty urgent set looks like an unavailable
-  table.
-- Treating `days_of_supply` as inbound-aware - it counts on-hand stock only; rank on
-  `total_days_of_supply_including_units_from_open_shipments`.
-- Forgetting the `country` filter on `amazon_fba_restock_recommendations` - a UK ranking
-  built from DE/ES/FR rows.
-- Surfacing Amazon's recommended quantity blindly - sanity-check it against real velocity
-  (a 4,000-unit reco on a 0-sales SKU is noise).
-- Calling a SKU dead from its own `units_sold_last_30_days` / `units_shipped_t30` - sibling
-  SKUs of a selling ASIN read 0; judge velocity per `child_asin` (and a 4,452-unit reco on a
-  sibling SKU of an ASIN selling 2,775 units a month is not noise).
-- Promising a ship date - `recommended_ship_date` is often null; render "n/a" and rank on
-  days-of-supply instead.
+- Calling a SKU out of stock while another SKU of the same product has stock.
+- Giving a spare SKU the sales of the whole product, or its quantity to the product.
+- Adding up Amazon's recommended quantities over the SKUs of one product.
+- Listing Grade and Resell (`amzn.gr.`) SKUs: they are used stock, not restockable.
+- Pulling the whole snapshot into a chat, or ranking one sorted page of it.
+- Reporting "nothing to restock" because the table came back empty.
+- Listing the products with the shortest cover first: a product with one unit left that
+  sells five a month then hides the one that sells 300.
+- Showing ten rows and no total: the seller asked how much to ship, not for a sample.
+- Printing rows at one pace and totals at another: the seller cannot add them up.
+- Putting an out-of-stock product whose inbound already covers it on top of the list.
+- Cutting the out-of-stock list by sales and then ranking it by units to ship: the
+  product that needs the most can sit below the cut.
+- Taking the pace outside a deal as 30-day units minus the units at the deal price: the
+  full-price units of the deal days stay in.
+- Dividing the 30-day units by the days in stock: a product often still sells on a day
+  whose snapshot shows nothing available, and the pace comes out too high.
+- Taking the product's daily sales by ASIN: a merchant-fulfilled offer keeps selling
+  while FBA is out, and the clean factor comes out at 1.
+- Printing an adjusted quantity of 0 for a product with no sales in the comparison
+  days: no sales to compare is "unknown", not "ship nothing".
+- Calling a full page "all products": 200 rows read are at least 200.
+- Using `inbound` as an alias on the fallback table, or `condition != Used` there: the
+  export is rejected, and its used grades are `UsedLikeNew`, `UsedGood` and so on.
+- Sizing a shipment on the sales of a month in which the product was out of stock half
+  the time, or on the sales of a deal for a shipment that lands after it - also in the
+  weeks after the deal has ended, while its sales are still inside the 30 days.
+- Recommending a restock for a product with no sales in 30 days.
+- Printing Amazon's ship date: it ignores the lead time and is often past.
+- Forgetting the `country` filter on `amazon_fba_restock_recommendations`.
 
 ## Notes
 
 - Read-only.
-- Pairs with a removal / excess-inventory skill for the opposite problem (overstock).
+- 30-day units come from the inventory table, added up per product. Stock with no sales
+  is a removal question, not a restock one: it is not listed here.
+- One lead time is applied to every product. Ask for it; products from different
+  suppliers can need separate runs.
+- The pre-selection follows Amazon's days of supply: a product that Amazon puts above
+  twice the lead time, or gives no value, is not checked.
+- Daily sales count order lines that have shipped, by the day of the order, while the
+  30-day units of the inventory table count shipments: the two do not add up exactly.
+  That is why the clean factor is a ratio taken from the daily sales alone, and is then
+  applied to the 30-day pace of the inventory table.
+- The limits (10 and 5 rows per bucket, 200 best sellers, twice the lead time for the
+  pre-selection, 3 days not clean, 7 clean days and 10 units on them for an adjusted
+  quantity, 80% for the selling SKU, 1.5 times for "selling faster") are defaults from a
+  test on one large UK account in November 2026. Say which
+  you used when asked.
 - A DataDoe skill, built on `amazon_fba_inventory_health` (premium) with
-  `amazon_fba_restock_recommendations` (Amazon's native restock report) as the fallback,
-  cross-checking velocity against `amazon_profit_by_sku_and_date`.
+  `amazon_fba_restock_recommendations` (Amazon's own restock report) as the fallback,
+  and on daily sales from `amazon_profit_by_sku_and_date` for the clean factor.
