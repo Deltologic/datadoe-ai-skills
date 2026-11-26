@@ -69,6 +69,14 @@ product, and any SKU with new stock can fill the order. So:
   how it sells on a clean day against the whole period: **clean factor** = (units on
   the clean days / clean days) / (units on all 28 days / 28). The factor gives the row
   an **adjusted quantity** (framework 4).
+  - The daily sales must be those of the same FBA SKUs that the stock and the 30-day
+    units come from (step 8 filters on them). Sales of a merchant-fulfilled offer on the
+    same product carry on while FBA is out of stock and would hide the gap. Where the
+    SKUs cannot be matched, give no adjusted quantity.
+  - The factor needs sales to compare: when the 28 days hold no unit at all (a product
+    can have shipped only in the last two days), it is undefined, not zero. Keep the
+    units to ship and write "no sales in the 28 comparison days - no adjusted
+    quantity".
   - A deal that sold no unit at the deal price changed nothing: its days stay clean,
     and the product does not count as "in a deal".
   - When the clean days all lie before a deal, the factor also holds whatever the
@@ -78,9 +86,10 @@ product, and any SKU with new stock can fill the order. So:
     clean days" and that the units to ship are a minimum (the product was out of stock)
     or an upper figure (it was in a deal), or simply uncertain when both apply.
   - Fewer than 10 units on the clean days make a rough factor: print the adjusted
-    quantity with "rough: {u} units on its clean days". With no unit at all on the clean
-    days the adjusted quantity is 0: write "it sold only in the deal" (or "only on days
-    the snapshot shows no stock"), and leave the decision to the seller.
+    quantity with "rough: {u} units on its clean days". With units in the 28 days but
+    none on the clean days the adjusted quantity is 0: write "it sold only in the deal"
+    (or "only on days the snapshot shows no stock"), and leave the decision to the
+    seller.
   - Count the days without stock only where the selling SKU shipped at least 80% of the
     product's 30-day units (where two SKUs share the sales, one of them at zero does not
     mean the product was out) and has a snapshot on at least 28 of the 30 days
@@ -135,10 +144,12 @@ hand for {d} days - check when the inbound lands".
   (framework 2), rounded up, never below 0. The note gives the reason and the factor,
   so that the number can be checked: "nothing available on {z} days: x{f} of the 30-day
   pace on its {n} clean days", "in a deal until {date}: x{f} ...", or both reasons.
-  Where a row has an adjusted quantity, plan on it. When the cover at the adjusted pace
-  puts the row in a later bucket, say so, and it replaces the row's list and ship-by
-  date for planning: "at that pace the cover is {d} days: ship soon, by {date}" or
-  "...: covered - nothing to ship now". The row stays where the 30-day pace put it, so
+  The days without stock in the note are those inside the 28 comparison days. Where a
+  row has an adjusted quantity, plan on it - except an adjusted 0 with "it sold only in
+  the deal", which is the seller's call. When the cover at the adjusted pace puts the
+  row in a later bucket, say so, and it replaces the row's list and ship-by date for
+  planning: "at that pace the cover is {d} days: ship soon, by {date}" or "...:
+  covered for now - the adjusted quantity can wait". The row stays where the 30-day pace put it, so
   that lists and totals add up. The bucket totals do not hold the adjustments: they run
   low where products were out of stock and high where they were in a deal - and the
   products not listed were not checked for either.
@@ -156,7 +167,8 @@ When the promotion tables are enabled, look up the deals of the listed products 
 inside the 30 days up to the snapshot, run now or are coming (step 8).
 
 - A running deal on a product that is out of stock is mostly wasted: note "in a deal
-  until {date} while out of stock" on the out-now rows.
+  until {date} while out of stock" on the out-now rows (also when the deal has sold
+  nothing so far; "more days at the deal's pace" does not apply to them).
 - The 30 days behind the pace hold the deal's sales, and they still do after the deal
   has ended. When the deal has ended, or ends before today + `L`, a shipment sent today
   lands after it: the deal's days are not clean days (framework 2). They run from its
@@ -239,7 +251,8 @@ Six to eight exports, each grouped. `{used-stock filters}` below means two row f
 `sku` `doesNotBeginWith` `amzn.gr.`, and on the primary source `condition` `!=` `Used`
 (its values are `New`, `Used` or an empty text, and the empty ones stay), on the
 fallback source `condition` `doesNotBeginWith` `Used` (there a value can be missing
-altogether, and a missing value is dropped by the filter: step 3 checks for that).
+altogether, and a missing value is dropped by the filter: step 3 checks for that and
+then switches the condition filter off).
 
 1. `sellers_and_vendors_list` -> pick the seller and its marketplace.
 2. `exports_sources_get` for `amazon_fba_inventory_health`. Not `enabled`, or
@@ -249,50 +262,63 @@ altogether, and a missing value is dropped by the filter: step 3 checks for that
    `cond_rows`, `limit: 50`. No row for the marketplace -> fallback. The newest `date` is
    the snapshot; print it, and say so when it is more than 2 days old. Steps 4 to 6 use
    `from` = `to` = that date and the filter `marketplace_country_code` = the
-   marketplace. `cond_rows` below `sku_rows` on the snapshot day means some rows have no
-   condition value at all (the fallback table allows that), and the condition filter
-   drops them: run step 4b. No row on the fallback either: say that neither source has
-   data for the marketplace, and stop.
+   marketplace. No row on the fallback either: say that neither source has data for the
+   marketplace, and stop.
+   - **Missing condition values.** `cond_rows` below `sku_rows` on the snapshot day
+     means some rows have no condition value at all (the fallback table allows that).
+     A condition filter would drop every one of them, and with them the stock of a
+     product whose other SKU is at zero. In that case send **no condition filter** in
+     steps 4 and 5: the SKU prefix alone leaves out the Grade and Resell stock, and no
+     row of a product is lost. Step 6 then shows the condition of every SKU of the
+     listed products: take a used one out of that product's numbers and judge it again.
+     Say in the report that {n} SKU rows have no condition and that used SKUs without
+     the `amzn.gr.` prefix could not be left out of the counts.
 4. **Out now.** `{used-stock filters}`, `groupBy: ["child_asin"]`, `sum(available)` as
    `avail`, `sum(inbound_quantity)` as `inbound_sum`, `sum(inbound_working)` as
    `inbound_planned`, `sum(reserved_fc_transfer)` as `in_transfer`,
    `sum(units_shipped_t30)` as `sold30`, `sum(units_shipped_t7)` as `sold7`; `having`
    `avail = 0` and `sold30 > 0`; ordered by `sold30` descending, `limit: 200`. One row
-   per product that is out of stock and was selling.
-   - **Is the list complete?** The rows come in the order of their sales, but the list
-     is ranked by units to ship, and a product further down with nothing inbound can
-     need more than one near the top whose inbound covers it. Fewer rows than the limit:
-     all are read. Exactly 200 rows: a product not read ships at most the last row's
-     `sold30` in 30 days, so it needs at most that x (`L` + `C`) / 30. The top 10 are
-     final when the 10th of them needs at least that much; if not, read the next page
-     (`skip: 200`), up to 3 pages. Still not settled: say that products with a larger
-     need may be missing, and print the bucket's products, units and units to ship as
-     "at least".
-   - **4b. Rows with no condition value** (only when the probe shows them). The same
-     export with `condition` `null` in place of the condition filter and `having` with
-     combinator `or`: `avail > 0`, `inbound_sum > 0`, `sold30 > 0`; `limit: 200`. Add
-     these numbers to the product's row in steps 4 and 5 before judging it: a product
-     with stock on such a SKU is not out of stock.
+   per product that is out of stock and was selling. Fewer rows than the limit: all are
+   read, and the list, the count and the totals are complete. Exactly 200 rows: two
+   separate questions.
+   - **Is the top of the list final?** The rows come in the order of their sales, but
+     the list is ranked by units to ship, and a product further down with nothing
+     inbound can need more than one near the top whose inbound covers it. A product not
+     read ships at most the last row's `sold30` in 30 days, so it needs at most that x
+     (`L` + `C`) / 30. The top 10 are final when the 10th of them needs at least that
+     much; if not, read the next page (`skip: 200`), up to 3 pages, and after that say
+     that products with a larger need may be missing.
+   - **Are the count and the totals complete?** No - not while a page came back full,
+     whatever the answer to the first question. Print the bucket's products, units and
+     units to ship as "at least", and do not write that every out-of-stock product was
+     checked. The exact number of products is the `rowCount` of the same export created
+     with `limit: 5000`: read it from the export's status, do not download the rows.
+     The unit totals stay "at least" unless every page is read.
 5. **Low cover.** The export of step 4 with
    `max(total_days_of_supply_including_units_from_open_shipments)` as `amz_days` added;
    `having` `avail > 0`, `sold30 > 0` and `amz_days <` 2 x `L`; ordered by `sold30`
    descending, `limit: 200`. These are the products Amazon puts under twice the lead
    time, largest sellers first. Work out the cover of each row at the 30-day pace and
    sort it into bucket 2, bucket 3 or covered (framework 3); add up each bucket's
-   products, 30-day units and units to ship. Exactly 200 rows means the smallest sellers
-   were cut: say "at least" with the counts and name the 30-day units of the last row.
-   The units at risk of a product not read are at most the last row's `sold30` x `L` /
-   30: the top 10 of bucket 2 are final when the 10th has at least that; if not, read
-   the next page as in step 4. Then pick the rows to list: 10 + 10 + 5.
-6. **Names, selling SKU and Amazon's quantity** for the listed products.
-   `{used-stock filters}` plus `child_asin` `in` those products; `groupBy:
-   ["child_asin", "sku", "product_name"]`, `sum(available)` as `avail`,
-   `sum(inbound_quantity)` as `inbound_sum`, `sum(units_shipped_t30)` as `sold30`,
+   products, 30-day units and units to ship. These two buckets are always "at least"
+   (the pre-selection is Amazon's, and 200 rows can cut it): name the 30-day units of
+   the last row when the page is full. The units at risk of a product not read are at
+   most the last row's `sold30` x `L` / 30: the top 10 of bucket 2 are final when the
+   10th has at least that; if not, read the next page as in step 4. Then pick the rows
+   to list: 10 + 10 + 5.
+6. **Names, SKUs and Amazon's quantity** for the listed products. Filters: the
+   marketplace, `sku` `doesNotBeginWith` `amzn.gr.` and `child_asin` `in` those
+   products - **no condition filter here**, so that a SKU with no condition value is
+   not lost; `groupBy: ["child_asin", "sku", "condition", "product_name"]`,
+   `sum(available)` as `avail`, `sum(inbound_quantity)` as `inbound_sum`,
+   `sum(reserved_fc_transfer)` as `in_transfer`, `sum(units_shipped_t30)` as `sold30`,
    `max(recommended_ship_in_quantity)` as `amz_qty`; `having` with combinator `or`:
    `sold30 > 0`, `avail > 0`, `inbound_sum > 0` (it drops the SKUs with nothing on
-   them); `limit: 150`. Per product, the selling SKU is the row with the largest
-   `sold30`: take Amazon's quantity from that row and ship to that SKU. Shorten
-   `product_name` to brand, product and size.
+   them); `limit: 150`. Leave out the rows whose
+   condition is used (`Used`, or a value that starts with `Used` on the fallback). The
+   rows that remain are the product's **eligible SKUs**. The selling SKU is the one
+   with the largest `sold30`: take Amazon's quantity from that row and ship to that
+   SKU. Shorten `product_name` to brand, product and size.
 7. **Days seen and days without stock** for the selling SKUs (framework 2). `from` = the
    snapshot date minus 29 days, `to` = the snapshot date; the marketplace filter and
    `sku` `in` the selling SKUs of step 6 (not the products: a product can have dozens of
@@ -316,13 +342,15 @@ altogether, and a missing value is dropped by the filter: step 3 checks for that
      23:00 UTC in a UTC+1 marketplace is the next local day.
    - **daily sales** of the listed products that have at least 3 days that are not
      clean (days without stock, days of a deal): `amazon_profit_by_sku_and_date`,
-     `from` = the snapshot date minus 29 days, `to` = the snapshot date, filters
-     `child_asin` `in` those products and `sku` `doesNotBeginWith` `amzn.gr.`;
-     `groupBy: ["child_asin", "date"]`,
+     `from` = the snapshot date minus 29 days, `to` = the snapshot date, filter `sku`
+     `in` the eligible SKUs of those products from step 6 - the same FBA SKUs the
+     stock and the 30-day units come from, not the whole product, which can also sell
+     through a merchant-fulfilled offer; `groupBy: ["child_asin", "date"]`,
      `sum(total_units_sold)` as `units_day`; `having` `units_day > 0`; ordered by
-     `child_asin`, `limit: 1000`. A day with no row sold nothing. Table disabled or not
-     accessible: no adjusted quantities; say that the 30-day pace could not be checked
-     against the daily sales.
+     `child_asin`, `limit: 1000`. A day with no row sold nothing. A product with an
+     eligible SKU that cannot go into the list (a comma in its name) gets no adjusted
+     quantity. Table disabled or not accessible: no adjusted quantities; say that the
+     30-day pace could not be checked against the daily sales.
 9. **Clean factor, adjusted quantities and notes** for the listed products (framework
    2, 4 and 5), then the report. A row can carry several notes: join them with a
    semicolon.
@@ -342,15 +370,15 @@ Lead time {L} days, cover after arrival {C} days: units to ship = 30-day pace x 
 The first two lists are urgent: no stock today, or none left before a shipment sent today can be sold. The third list has a ship-by date per product.
 {k} of the {m} listed products are or were in a deal in the last 30 days that sold units and is over before {today + L}: their 30-day sales hold the deal. Plan on the adjusted quantity where a row has one. The second and third list and their totals run high while such deals are inside the 30 days: the products not listed were not checked for them.
 
-OUT NOW - no stock on any SKU: {x} products, {u} units shipped in 30 days, at least {s} units to ship together; {n} of them need no new shipment (inbound or units in transfer cover them)
+OUT NOW - no stock on any SKU: {x} products{ ({r} of them read)}, {at least }{u} units shipped in 30 days, {at least }{s} units to ship together; {n} of them need no new shipment (inbound or units in transfer cover them){. Most of them ship under 5 units a month ({k} of {x})}
   product ({asin})   30-day units   on the way                                           units to ship   adjusted   Amazon's qty   ship to SKU   notes
-  {name}             {n}            {nothing | {n} inbound{ + {n} in transfer}, covers {d} days}   {n}     {n | -}    {n}            {sku}         {nothing available on {z} days: x{f} of the 30-day pace on its {n} clean days | in a deal until {date} while out of stock | only {n} clean days - the units to ship are {a minimum | an upper figure | uncertain} | rough: {u} units on its clean days | it sold only in the deal | only {n} daily snapshots in the 30 days}
+  {name}             {n}            {nothing | {n} inbound{ + {n} in transfer}, covers {d} days}   {n}     {n | -}    {n}            {sku}         {nothing available on {z} days: x{f} of the 30-day pace on its {n} clean days | in a deal until {date} while out of stock | only {n} clean days - the units to ship are {a minimum | an upper figure | uncertain} | rough: {u} units on its clean days | it sold only in the deal - your call | no sales in the 28 comparison days - no adjusted quantity | only {n} daily snapshots in the 30 days}
   ...
   {+ {k} more products}
 
 RUNS OUT BEFORE A NEW SHIPMENT ARRIVES - cover under {L} days: at least {y} products, {u} units shipped in 30 days, about {s} units to ship together
   product ({asin})   stock + inbound   30-day units   cover   units at risk   units to ship   adjusted   Amazon's qty   ship to SKU   notes
-  {name}             {n} + {n}         {n}            {d} d   {n}             {n}             {n | -}    {n}            {sku}         {{in | was in} a deal until {date}{, {d} more days at the deal's pace}: x{f} of the 30-day pace on its {n} clean days | nothing available on {z} days: x{f} ... | at that pace the cover is {d} days: {ship soon, by {date} | covered - nothing to ship now} | a deal starts on {date} - it will sell faster than the pace | selling faster this week | of which {n} inbound not shipped yet | on hand for {d} days - check when the inbound lands}
+  {name}             {n} + {n}         {n}            {d} d   {n}             {n}             {n | -}    {n}            {sku}         {{in | was in} a deal until {date}{, {d} more days at the deal's pace}: x{f} of the 30-day pace on its {n} clean days | nothing available on {z} days: x{f} ... | at that pace the cover is {d} days: {ship soon, by {date} | covered for now - the adjusted quantity can wait} | a deal starts on {date} - it will sell faster than the pace | selling faster this week | of which {n} inbound not shipped yet | on hand for {d} days - check when the inbound lands}
   ...
   {+ {k} more products}
 
@@ -360,9 +388,9 @@ SHIP SOON - cover {L} to {L + 14} days: at least {z} products, {u} units shipped
   ...
   {+ {k} more products}
 
-Adjusted = the same formula at the pace of the product's clean days (days with stock, outside a deal that is over before the shipment lands); the note gives the factor, and "rough" means it rests on fewer than 10 units. Where a row has an adjusted quantity, plan on it; a note "covered" or "ship soon" replaces the row's list and date. Totals use the 30-day pace and do not hold the adjustments.{ For products in a deal the clean days lie before it: a seasonal rise or fall since then is inside the factor.}
+Adjusted = the same formula at the pace of the product's clean days (days with stock, outside a deal that is over before the shipment lands); the note gives the factor, and "rough" means it rests on fewer than 10 units. Where a row has an adjusted quantity, plan on it (an adjusted 0 for a product that sold only in its deal is your call); a note "covered for now" or "ship soon" replaces the row's list and date. Totals use the 30-day pace and do not hold the adjustments.{ For products in a deal the clean days lie before it: a seasonal rise or fall since then is inside the factor.}
 Amazon's qty is Amazon's own forecast for the selling SKU: where it is far from the quantity to plan on, check the product's forecast in Seller Central before shipping the larger number.
-Checked: every product that is out of stock, and the {n} best sellers that Amazon puts under {2L} days of supply{ (cut at 200; the last one shipped {n} units in 30 days)}. Products that Amazon puts above {2L} days are not checked, so the second and third list are "at least". Used-condition SKUs left out.
+Checked: {every product that is out of stock | the {r} out-of-stock products with the most sales, of {x}}, and the {n} best sellers that Amazon puts under {2L} days of supply{ (cut at 200; the last one shipped {n} units in 30 days)}. Products that Amazon puts above {2L} days are not checked, so the second and third list are "at least". Used-condition SKUs left out.
 ```
 
 Leave out a bucket that is empty with one line ("No product is out of stock"). Print the
@@ -423,8 +451,12 @@ Lead time 30 days, cover 30 days.
   are, and did I count days without stock only for a selling SKU that ships 80% or more
   of the product and has its snapshots?
 - Did I look up the deals that ended inside the 30 days, not only the running ones?
-- Did I check that the out-now list is complete before ranking it, or mark it "at
-  least"?
+- When the out-now export came back full: did I check the top of the list with the
+  bound, and print the count and the totals as "at least" either way?
+- Did the daily sales come from the same eligible FBA SKUs as the stock, and did I give
+  no adjusted quantity where the 28 days hold no sales?
+- With condition values missing: did I switch the condition filter off instead of
+  losing those rows?
 - Do the units to ship of the listed rows use the same pace as the bucket totals?
 - Did I decide the buckets in whole numbers, so that a cover of exactly the lead time is
   "ship soon"?
@@ -452,6 +484,11 @@ Lead time 30 days, cover 30 days.
   full-price units of the deal days stay in.
 - Dividing the 30-day units by the days in stock: a product often still sells on a day
   whose snapshot shows nothing available, and the pace comes out too high.
+- Taking the product's daily sales by ASIN: a merchant-fulfilled offer keeps selling
+  while FBA is out, and the clean factor comes out at 1.
+- Printing an adjusted quantity of 0 for a product with no sales in the comparison
+  days: no sales to compare is "unknown", not "ship nothing".
+- Calling a full page "all products": 200 rows read are at least 200.
 - Using `inbound` as an alias on the fallback table, or `condition != Used` there: the
   export is rejected, and its used grades are `UsedLikeNew`, `UsedGood` and so on.
 - Sizing a shipment on the sales of a month in which the product was out of stock half
