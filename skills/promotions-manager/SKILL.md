@@ -459,20 +459,22 @@ plan check.
        "upfront_fee_currency", "upfront_fee_frequency", "variable_fee_pct",
        "variable_fee_cap_amount"]`, `countDistinct(promotion_id)` as `found`;
        `limit: 50`.
-     The rows are the fee previews of exactly the wave's promotions. One row with
-     `found` = `mapped`: that preview belongs to each of them. `found` below `mapped`:
-     first count the ids you sent against the wave's id rows and send the lookup again
-     - one mistyped id looks the same as a missing configuration. In two cases the
-     counts are not enough and the lookup is repeated with `promotion_id` in the
-     `groupBy` (`limit: 500`), which names each promotion that has a preview:
-     - `found` still below `mapped`: the promotions with no row have no configuration
-       in the mirror and no preview. Print "fee preview for {found} of {deals} deals"
-       and work the fee out for the named ones only, each from its own revenue in the
-       id rows - never from the wave's revenue;
-     - two or more rows: the wave mixes fee previews. Work each promotion's fee out from
-       its own preview and its own revenue.
-     In both cases count the deals below their fee from those promotion rows, not from
-     the threshold export of step 5.
+     The rows are the fee previews of exactly the wave's promotions. `found` below
+     `mapped`: first count the ids you sent against the wave's id rows and send the
+     lookup again - one mistyped id looks the same as a missing configuration.
+     - **One row, and `found` = `mapped` = `deals`:** every deal of the wave has that
+       preview. Only here is the wave's fee worked out from the wave's revenue
+       (framework 3), and only here does the threshold export of step 5 count its deals
+       below their fee.
+     - **Every other case** - some deals have no link (`mapped` below `deals`), some
+       links have no configuration (`found` below `mapped`), or the previews differ (two
+       or more rows): repeat the lookup with `promotion_id` in the `groupBy` (`limit:
+       500`), which names each promotion that has a preview. Work the fee out for those
+       promotions only, each from its own preview and its own revenue in the id rows -
+       never a rate applied to the wave's revenue. Print "fee preview for {n} of
+       {deals} deals; the fee of the other {deals - n} is unknown", count the deals
+       below their fee from those promotion rows, and keep the wave's verdict "before
+       the unknown fees".
 5. **Deals with no sale, deals below their fee, largest deals** - three exports on
    `amazon_promotion_performance`, all with the filters `end_date_time >=` the start of
    the review window, `start_date_time <` tomorrow's date (upcoming waves stay out) and
@@ -487,7 +489,9 @@ plan check.
      deals with no sale. The threshold belongs to one fee preview and one deal length.
      When every wave with a preview has the same threshold, one export does it; when
      they differ, run it once per threshold with that wave's day filters of step 8a
-     added. Not for a wave without a preview;
+     added. It counts only for a wave whose every deal has that preview (`found` =
+     `mapped` = `deals` in step 4); for any other wave take the count from the
+     promotion rows of step 4, and ignore its rows here;
    - **largest deals:** `groupBy: ["promotion_type", "start_date_time",
      "end_date_time", "promotion_id", "promotion_name"]`, `sum(product_units_sold)` as
      `deal_units`, `sum(product_revenue)` as `deal_revenue`; ordered by `deal_revenue`
@@ -603,11 +607,15 @@ plan check.
      `promotions_api_mapping_id` `in` them; `groupBy: ["promotion_id",
      "promotions_api_mapping_id", "promotion_type", "start_date_time",
      "end_date_time"]`, `sum(product_revenue)` as `deal_revenue`; `limit: 300`. Coupon
-     fee rows: the same on `amazon_coupon_performance` with `coupon_id` `in` them,
-     `groupBy: ["coupon_id", "start_date_time", "end_date_time"]`. Each row found ties
-     a settled fee to its promotion and its wave - also for a deal with no link to the
-     mirror. A fee row that matches nothing: list it as "settled deal fee, promotion not
-     found" with its date and amount, and do not add it to any wave;
+     fee rows the same way on `amazon_coupon_performance`, also on both ids: combinator
+     `or`, `coupon_id` `in` them, `promotions_api_mapping_id` `in` them; `groupBy:
+     ["coupon_id", "promotions_api_mapping_id", "start_date_time", "end_date_time"]`;
+     `limit: 300`. Each row found ties a settled fee to its promotion (and a deal to its
+     wave) - also for a promotion with no link to the mirror, and the linked id leads to
+     its fee preview. Apply each fee column of a settlement row once: the deal columns
+     to the deal it matched, the coupon columns to the coupon it matched. A fee row that
+     matches nothing: list it as "settled {deal | coupon} fee, promotion not found" with
+     its date and amount, and do not add it anywhere;
    - compare **per promotion and per component**: the participation fee with the fixed
      part of the preview, the performance fee with its variable part (for coupons also
      the redemption fee). A component can post in parts as well, so a posting is not
@@ -860,8 +868,10 @@ A UK store, two months after its autumn event and in the middle of a longer one.
 - Did I assign each fee preview by the promotion's identity (the id lookup, for every
   wave with a link; by promotion where only some have a preview or the previews
   differ), with the fixed part for every charged period and the cap per promotion?
-- Did I match settled fee rows from the settlement side, on either id, also for deals
-  with no link to the mirror?
+- Did I match settled fee rows from the settlement side, on either id, for deals and
+  coupons alike, also where there is no link to the mirror?
+- Did I work a wave's fee out from the wave's revenue only when every deal of it has
+  the same preview (`found` = `mapped` = `deals`)?
 - Did I keep running and upcoming waves apart?
 - Did I call the fee a preview, show settled and preview amounts per component, and
   keep a verdict that depends on a preview conditional?
