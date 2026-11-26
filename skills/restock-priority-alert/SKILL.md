@@ -67,8 +67,8 @@ product, and any SKU with new stock can fill the order. So:
     quantity is a minimum". Do this only where the selling SKU shipped at least 80% of
     the product's 30-day units; where two SKUs share the sales, one of them at zero does
     not mean the product was out.
-  - **In a deal that ends before the shipment lands** (framework 5): the pace outside
-    the deal.
+  - **In a deal inside the 30 days that ended, or ends before the shipment lands**
+    (framework 5): the pace outside the deal.
 - **Selling faster this week** = 7-day units / 7 is at least 1.5 times the 30-day pace,
   with at least 7 units in the 7 days, on a product that has stock and is not in a
   running deal (the deal note covers that case). It will run out sooner than the cover
@@ -119,11 +119,12 @@ the inbound lands".
   - out of stock part of the month, and no deal or a deal with no unit sold: at the
     in-stock pace ("out of stock on {n} of 30 days"). Plan on it: the demand was higher
     than the 30-day sales show;
-  - in a deal that ends before the shipment lands, at zero on fewer than 3 days: at the
-    pace outside the deal, printed only when the quantity comes out lower than the units
-    to ship ("in a deal until {date}: {x} of the {y} units sold at the deal price").
-    Plan on it: the shipment lands after the deal. When it does not come out lower:
-    the same note with "the deal did not raise its pace", and no adjusted quantity;
+  - in a deal that has ended or ends before the shipment lands, at zero on fewer than 3
+    days: at the pace outside the deal, printed only when the quantity comes out lower
+    than the units to ship ("in a deal until {date}: {x} of the {y} units sold at the
+    deal price"). Plan on it: the shipment lands after the deal. When it does not come
+    out lower: the same note with "the deal did not raise its pace", and no adjusted
+    quantity;
   - both, with units sold at the deal price: at the in-stock pace, with "out of stock
     on {n} of 30 days; {x} of its {y} units sold at the deal price - an upper figure".
     Plan between the two numbers.
@@ -140,19 +141,22 @@ the inbound lands".
 
 ### 5. Promotions on the listed products
 
-When the promotion tables are enabled, mark the listed products that are in a running or
-coming deal (step 8). Two things follow:
+When the promotion tables are enabled, look up the deals of the listed products that ran
+inside the 30 days up to the snapshot, run now or are coming (step 8). Two things follow:
 
-- A deal on a product that is out of stock sells nothing while it runs: say so on the
-  out-now rows.
-- The 30 days behind the pace hold the deal's sales. When the deal ends before today +
-  `L`, a shipment sent today lands after it. **Pace outside the deal** = (30-day units -
-  units sold at the deal price) / (30 - the deal's days inside the 30 days up to the
-  snapshot, from its first day to the snapshot day, both included), never below 0. Use it only when the deal started inside those 30 days and
-  at least 7 of them lie outside it; otherwise write "in a deal until {date} - the
-  30-day sales include it". On a ship-soon row whose
-  cover at that pace is above `L` + 14 days, write "covered at the pace outside the
-  deal".
+- A running deal on a product that is out of stock sells nothing while it runs: say so
+  on the out-now rows.
+- The 30 days behind the pace hold the deal's sales, and they still do after the deal
+  has ended. When the deal has ended, or ends before today + `L`, a shipment sent today
+  lands after it. **Pace outside the deal** = (30-day units - units sold at the deal
+  price) / (30 - the deal's days inside the 30 days up to the snapshot), never below 0.
+  The deal's days inside the 30 days run from its first day (or the first of the 30) to
+  its last day (or the snapshot day), all included; with more than one deal, add up
+  their units and their days. Use it only when the deal started
+  inside those 30 days and at least 7 of them lie outside it; otherwise write "in a deal
+  until {date} - the 30-day sales include it". For a deal that has ended the note
+  starts "was in a deal until {date}". On a ship-soon row whose cover at that pace is
+  above `L` + 14 days, write "covered at the pace outside the deal".
 
 Skip this silently when the tables are disabled.
 
@@ -254,10 +258,11 @@ empty condition stay).
    was never at zero. Spare SKUs show up here with 30 days at zero: ignore them.
 8. **Promotions on the listed products** (framework 5, only when
    `amazon_promotion_performance` is enabled). Filters: `asin` `in` the listed products,
-   `end_date_time >=` today, `promotion_status != CANCELED`; `groupBy: ["asin",
-   "promotion_name", "promotion_type", "start_date_time", "end_date_time"]`,
-   `sum(product_units_sold)` as `deal_units`; `limit: 100`. This table has no `date`
-   column: send no `from` / `to`. A start after today is a coming deal. Add up the
+   `end_date_time >=` the snapshot date minus 29 days, `promotion_status != CANCELED`;
+   `groupBy: ["asin", "promotion_name", "promotion_type", "start_date_time",
+   "end_date_time"]`, `sum(product_units_sold)` as `deal_units`; `limit: 100`. This
+   table has no `date` column: send no `from` / `to`. An end before today is a deal that
+   has ended inside the 30 days; a start after today is a coming deal. Add up the
    `deal_units` of a product's deals.
 9. **Adjusted quantities and notes** for the listed products (framework 2, 4 and 5),
    then the report.
@@ -274,7 +279,7 @@ Restock Priority - {seller} ({marketplace}) - snapshot {date}{, {n} days old}
 Source: FBA Inventory Health | FBA Restock Recommendations (fallback - {reason})
 Lead time {L} days, cover after arrival {C} days: units to ship = 30-day pace x {L + C} days - stock - inbound.
 {x} products are out of stock and were selling. {At least }{y} more run out before a shipment sent today can be sold ({today + L}). At least {z} more need a shipment within 14 days.
-{k} of the listed products are in a deal that ends before {today + L}: their 30-day sales include the deal.
+{k} of the listed products are or were in a deal inside the last 30 days that is over before {today + L}: their 30-day sales include the deal.
 
 OUT NOW - no stock on any SKU: {x} products, {u} units shipped in 30 days, at least {s} units to ship together; {n} of them need no new shipment (inbound or units in transfer cover them)
   product ({asin})   30-day units   on the way                                           units to ship   adjusted   Amazon's qty      ship to SKU   notes
@@ -284,7 +289,7 @@ OUT NOW - no stock on any SKU: {x} products, {u} units shipped in 30 days, at le
 
 RUNS OUT BEFORE A NEW SHIPMENT ARRIVES - cover under {L} days: {at least }{y} products, {u} units shipped in 30 days, about {s} units to ship together
   product ({asin})   stock + inbound   30-day units   cover   units at risk   units to ship   adjusted   Amazon's qty      ship to SKU   notes
-  {name}             {n} + {n}         {n}            {d} d   {n}             {n}             {n | -}    {n}{ (differs)}   {sku}         {in a deal until {date}: {x} of the {y} units sold at the deal price{ - the deal did not raise its pace} | out of stock on {n} of 30 days | selling faster this week | of which {n} inbound not shipped yet | on hand for {d} days - check when the inbound lands}
+  {name}             {n} + {n}         {n}            {d} d   {n}             {n}             {n | -}    {n}{ (differs)}   {sku}         {{in | was in} a deal until {date}: {x} of the {y} units sold at the deal price{ - the deal did not raise its pace} | out of stock on {n} of 30 days | selling faster this week | of which {n} inbound not shipped yet | on hand for {d} days - check when the inbound lands}
   ...
   {+ {k} more products}
 
@@ -292,7 +297,7 @@ SHIP SOON - cover {L} to {L + 14} days: at least {z} products, {u} units shipped
   product ({asin})   stock + inbound   30-day units   cover   ship by   units to ship   adjusted   Amazon's qty      ship to SKU   notes
   ...
 
-Adjusted = the same formula at the pace while in stock (the product was out of stock part of the month) or at the pace outside a deal that ends before the shipment lands; the note says which. Where a row has an adjusted quantity, plan on it ("upper figure": between the two). Totals use the 30-day pace and do not hold the adjustments.
+Adjusted = the same formula at the pace while in stock (the product was out of stock part of the month) or at the pace outside a deal that is over before the shipment lands; the note says which. Where a row has an adjusted quantity, plan on it ("upper figure": between the two). Totals use the 30-day pace and do not hold the adjustments.
 (differs) = Amazon's forecast is far from this one: check the product's forecast in Seller Central before shipping the larger number.
 Checked: every product that is out of stock, and the {n} best sellers that Amazon puts under {2L} days of supply{ (cut at 200; the last one shipped {n} units in 30 days)}. Used-condition SKUs left out.
 ```
@@ -344,9 +349,10 @@ Lead time 30 days, cover 30 days.
   the rows not listed are counted?
 - Is the adjusted quantity at the in-stock pace only where the selling SKU was at zero
   on 3 or more days, in stock on 14 or more, and ships 80% or more of the product?
-- For a product in a deal that ends before the shipment lands and at zero on fewer than
-  3 days: did I print the adjusted quantity at the pace outside the deal, when it comes
-  out lower?
+- For a product in a deal that has ended inside the 30 days or ends before the shipment
+  lands, and at zero on fewer than 3 days: did I print the adjusted quantity at the pace
+  outside the deal, when it comes out lower?
+- Did I look up the deals that ended inside the 30 days, not only the running ones?
 - Did I decide the buckets in whole numbers, so that a cover of exactly the lead time is
   "ship soon"?
 - Do the units to ship of the listed rows use the same pace as the bucket totals?
@@ -369,7 +375,8 @@ Lead time 30 days, cover 30 days.
 - Printing rows at one pace and totals at another: the seller cannot add them up.
 - Putting an out-of-stock product whose inbound already covers it on top of the list.
 - Sizing a shipment on the sales of a month in which the product was out of stock half
-  the time, or on the sales of a deal for a shipment that lands after it.
+  the time, or on the sales of a deal for a shipment that lands after it - also in the
+  weeks after the deal has ended, while its sales are still inside the 30 days.
 - Recommending a restock for a product with no sales in 30 days.
 - Printing Amazon's ship date: it ignores the lead time and is often past.
 - Forgetting the `country` filter on `amazon_fba_restock_recommendations`.
