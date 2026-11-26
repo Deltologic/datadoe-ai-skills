@@ -267,12 +267,26 @@ then switches the condition filter off).
    - **Missing condition values.** `cond_rows` below `sku_rows` on the snapshot day
      means some rows have no condition value at all (the fallback table allows that).
      A condition filter would drop every one of them, and with them the stock of a
-     product whose other SKU is at zero. In that case send **no condition filter** in
-     steps 4 and 5: the SKU prefix alone leaves out the Grade and Resell stock, and no
-     row of a product is lost. Step 6 then shows the condition of every SKU of the
-     listed products: take a used one out of that product's numbers and judge it again.
-     Say in the report that {n} SKU rows have no condition and that used SKUs without
-     the `amzn.gr.` prefix could not be left out of the counts.
+     product whose other SKU is at zero. Without a condition filter, used stock on a
+     SKU without the `amzn.gr.` prefix would count as stock and could hide a product
+     that is out of new stock. So, in that case, find the used stock first and take it
+     out before any product is judged:
+     - **3b. Used stock without the prefix.** The snapshot day and the marketplace,
+       `sku` `doesNotBeginWith` `amzn.gr.`, `condition` `beginsWith` `Used`;
+       `groupBy: ["child_asin"]`, `sum(available)` as `avail_used`,
+       `sum(inbound_quantity)` as `inbound_used` (`inbound` on the fallback),
+       `sum(reserved_fc_transfer)` as `transfer_used`, `sum(units_shipped_t30)` as
+       `sold30_used`; `having` with combinator `or`: `avail_used > 0`, `inbound_used >
+       0`, `sold30_used > 0`; `limit: 200` (a full page: read the next with `skip`).
+     - No row: no used stock hides anywhere. Run steps 4 and 5 with **no condition
+       filter** (the SKU prefix still leaves out Grade and Resell stock): nothing is
+       lost and nothing used is counted.
+     - Rows: steps 4 and 5 run with no condition filter and with `child_asin` `notIn`
+       the products of 3b. Those products get one more export of their own - the
+       export of step 5 with `child_asin` `in` them and no `having` - and before they
+       are judged, their 3b numbers are subtracted. A product of 3b with no new stock
+       left and new sales in 30 days is out now, whatever its used stock.
+     Say in the report how many SKU rows have no condition.
 4. **Out now.** `{used-stock filters}`, `groupBy: ["child_asin"]`, `sum(available)` as
    `avail`, `sum(inbound_quantity)` as `inbound_sum`, `sum(inbound_working)` as
    `inbound_planned`, `sum(reserved_fc_transfer)` as `in_transfer`,
@@ -291,9 +305,10 @@ then switches the condition filter off).
    - **Are the count and the totals complete?** No - not while a page came back full,
      whatever the answer to the first question. Print the bucket's products, units and
      units to ship as "at least", and do not write that every out-of-stock product was
-     checked. The exact number of products is the `rowCount` of the same export created
-     with `limit: 5000`: read it from the export's status, do not download the rows.
-     The unit totals stay "at least" unless every page is read.
+     checked. The number of products is the `rowCount` of the same export created with
+     `limit: 5000`: read it from the export's status, do not download the rows. Below
+     5,000 it is exact; at 5,000 it is "at least 5,000". The unit totals stay "at
+     least" unless every page is read.
 5. **Low cover.** The export of step 4 with
    `max(total_days_of_supply_including_units_from_open_shipments)` as `amz_days` added;
    `having` `avail > 0`, `sold30 > 0` and `amz_days <` 2 x `L`; ordered by `sold30`
@@ -314,7 +329,10 @@ then switches the condition filter off).
    `sum(reserved_fc_transfer)` as `in_transfer`, `sum(units_shipped_t30)` as `sold30`,
    `max(recommended_ship_in_quantity)` as `amz_qty`; `having` with combinator `or`:
    `sold30 > 0`, `avail > 0`, `inbound_sum > 0` (it drops the SKUs with nothing on
-   them); `limit: 150`. Leave out the rows whose
+   them); `limit: 150`. Exactly 150 rows: read the next page (`skip: 150`) until a page
+   comes back short - the SKU list of a product has to be complete before its selling
+   SKU, its eligible SKUs and its daily sales (step 8) are taken from it. A product
+   whose rows are not all read gets no adjusted quantity. Leave out the rows whose
    condition is used (`Used`, or a value that starts with `Used` on the fallback). The
    rows that remain are the product's **eligible SKUs**. The selling SKU is the one
    with the largest `sold30`: take Amazon's quantity from that row and ship to that
@@ -455,8 +473,11 @@ Lead time 30 days, cover 30 days.
   bound, and print the count and the totals as "at least" either way?
 - Did the daily sales come from the same eligible FBA SKUs as the stock, and did I give
   no adjusted quantity where the 28 days hold no sales?
-- With condition values missing: did I switch the condition filter off instead of
-  losing those rows?
+- With condition values missing: did I find the used stock without the prefix first
+  (3b), take it out of its products before judging them, and run steps 4 and 5 without
+  a condition filter?
+- Is the SKU list of step 6 complete (paged when 150 rows came back) before I took
+  selling SKUs and eligible SKUs from it?
 - Do the units to ship of the listed rows use the same pace as the bucket totals?
 - Did I decide the buckets in whole numbers, so that a cover of exactly the lead time is
   "ship soon"?
