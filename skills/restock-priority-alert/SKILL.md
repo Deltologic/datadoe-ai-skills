@@ -273,19 +273,27 @@ then switches the condition filter off).
      out before any product is judged:
      - **3b. Used stock without the prefix.** The snapshot day and the marketplace,
        `sku` `doesNotBeginWith` `amzn.gr.`, `condition` `beginsWith` `Used`;
-       `groupBy: ["child_asin"]`, `sum(available)` as `avail_used`,
-       `sum(inbound_quantity)` as `inbound_used` (`inbound` on the fallback),
-       `sum(reserved_fc_transfer)` as `transfer_used`, `sum(units_shipped_t30)` as
-       `sold30_used`; `having` with combinator `or`: `avail_used > 0`, `inbound_used >
-       0`, `sold30_used > 0`; `limit: 200` (a full page: read the next with `skip`).
+       `groupBy: ["child_asin"]`, and every quantity that steps 4 and 5 use:
+       `sum(available)` as `avail_used`, `sum(inbound_quantity)` as `inbound_used`
+       (`inbound` on the fallback), `sum(inbound_working)` as `planned_used`
+       (`working`), `sum(reserved_fc_transfer)` as `transfer_used` (`fc_transfer`),
+       `sum(units_shipped_t30)` as `sold30_used` (`units_sold_last_30_days`) and, on
+       the primary source, `sum(units_shipped_t7)` as `sold7_used`; `having` with
+       combinator `or`: `avail_used > 0`, `inbound_used > 0`, `transfer_used > 0`,
+       `sold30_used > 0`; `limit: 200`. A full page: read the next with `skip` until a
+       page comes back short. Every page is one batch of at most 200 products.
      - No row: no used stock hides anywhere. Run steps 4 and 5 with **no condition
        filter** (the SKU prefix still leaves out Grade and Resell stock): nothing is
        lost and nothing used is counted.
      - Rows: steps 4 and 5 run with no condition filter and with `child_asin` `notIn`
-       the products of 3b. Those products get one more export of their own - the
-       export of step 5 with `child_asin` `in` them and no `having` - and before they
-       are judged, their 3b numbers are subtracted. A product of 3b with no new stock
-       left and new sales in 30 days is out now, whatever its used stock.
+       the products of 3b (all batches; a list above 700 goes into several `notIn`
+       rules). The 3b products are read back batch by batch - the export of step 5 with
+       `child_asin` `in` one batch and no `having`, one export per batch - and every
+       batch is read before any cover is worked out. Subtract each product's 3b numbers
+       from its row, quantity by quantity, then judge it on what is left: no new stock
+       and new sales in 30 days is out now, whatever its used stock; otherwise its cover
+       sorts it into a bucket directly, without the pre-selection by Amazon's days of
+       supply (which can hold the used SKUs).
      Say in the report how many SKU rows have no condition.
 4. **Out now.** `{used-stock filters}`, `groupBy: ["child_asin"]`, `sum(available)` as
    `avail`, `sum(inbound_quantity)` as `inbound_sum`, `sum(inbound_working)` as
