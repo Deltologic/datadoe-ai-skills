@@ -67,8 +67,9 @@ An account can run hundreds of one-product deals in a single event. A **wave** i
 group of promotions that start and end together (the same `start_date_time` and
 `end_date_time` on the performance table); an event can hold a few waves with different
 start days. Review the wave, list its deals, and go down to one deal only when the user
-asks (the deal view, step 10). The server adds the rows up: no step reads one row per
-ASIN or one row per promotion from a raw table.
+asks (the deal view, step 10). The server adds the rows up: no step pulls raw rows.
+Two grouped lists are long on purpose - one row per product of a wave (step 8a) and one
+per linked promotion (step 4) - because their ids go into the next filter.
 
 ### 3. Cost: fees first
 
@@ -146,14 +147,19 @@ for the **other products** - the products that were in none of the reviewed wave
   much of the result is a fee preview that settlements do not show. Different classes:
   the verdict is conditional - "{class} if Amazon charges the fee preview, {class} if
   it does not".
-- **Short waves.** A few days of sales carry little signal. For a wave of fewer than 7
-  promo days, a profit effect after pull-forward within 15% of the deal revenue is "too
-  small to call". Apply this first, to the result against the other products' pace and
-  to the one against its own baseline: where it holds, set the class as if that effect
-  were zero, and then apply the fee rule above. Fees are arithmetic, not signal: they
-  still count in full. The table keeps the measured amounts, with "(too small to call)"
-  next to the profit effect, and the verdict reads "{class} if Amazon charges the fee
-  preview; too small to call if it does not".
+- **Short waves.** A few days of sales carry little signal: for a wave of fewer than 7
+  promo days the profit effect after pull-forward is only known to within 15% of the
+  deal revenue either way. Do not treat it as zero and do not trust it to the pound:
+  work the outcome out at both ends of that band (the measured effect minus the band,
+  and plus the band), after fees. Both ends in one class: that is the class. Otherwise
+  the outcome is "too small to call", and say what it spans ("between a loss and a
+  gain"). Do this for the result against the other products' pace and for the one
+  against its own baseline, and for the outcome with and without a fee that is still a
+  preview. When the two yardsticks give different outcomes in one fee case, that fee
+  case is "uncertain": name both. A measured gain is never turned into a loss by this
+  rule, and the reverse.
+  The table keeps the measured amounts, with "(+-{band}: too small to call)" next to
+  the profit effect where it applies.
 - **Waves that share products on the same days.** When two reviewed waves overlap in
   days and hold some of the same products, those products' sales sit in both series and
   cannot be split between the waves. Neither gets a profit verdict of its own: print
@@ -285,7 +291,7 @@ exists (`PRICE_THRESHOLD_NOT_MET` prints Amazon's exact maximum price - use it).
   an `in` / `notIn` value is a comma-separated list; a `between` value is `a,b`; a date
   value is `YYYY-MM-DD`. Create one or two exports or source lookups at a time and retry
   once when the server answers that it is rate-limiting; a premium export can stay
-  pending for a minute.
+  pending for a minute or two.
   The column names below were checked against the schemas: call `exports_source_get`
   only when an export is rejected for a column.
 - **Every export is grouped and small.** Raw promotion rows carry long JSON and account
@@ -395,7 +401,7 @@ exists (`PRICE_THRESHOLD_NOT_MET` prints Amazon's exact maximum price - use it).
 
 ## Step-by-step workflow (MCP-native)
 
-About 22 small exports for the calendar and a review of three waves. Steps 3 to 9 answer
+About 28 small exports for the calendar and a review of three waves. Steps 3 to 9 answer
 "what is running" and "did it pay off"; step 10 is one deal on request; step 11 is the
 plan check.
 
@@ -433,25 +439,34 @@ plan check.
      and dates. When its days fall in the baseline or the promo days of a reviewed
      wave, say that it could not be taken out of them.
    - **Fee preview, by identity.** `mapped` is the number of the wave's promotions that
-     exist in `amazon_promotions`. `mapped` = 0: no fee preview (the deals are older than
-     the mirror) - "fee unavailable" unless step 9 finds settled rows or the skill holds
-     a verified schedule for that marketplace and event. Otherwise take the calendar
-     groups (step 3) that start and end on the wave's days. One fee preview among them
-     and `promos` = `mapped` = `deals`: the two sets are the same promotions, and that
-     preview belongs to each of them. Anything else - two different fee previews on
-     those days, or counts that differ - is resolved by id, never by guessing:
-     - the wave's promotions: `amazon_promotion_performance`, the filters of step 8a for
-       that wave; `groupBy: ["promotion_id", "promotions_api_mapping_id"]`,
-       `sum(product_revenue)` as `deal_revenue`; `limit: 500`;
-     - their previews: `amazon_promotions`, `promotion_id` `in` those mapping ids;
-       `groupBy: ["promotion_id", "upfront_fee_amount", "upfront_fee_currency",
-       "upfront_fee_frequency", "variable_fee_pct", "variable_fee_cap_amount",
-       "start_date", "end_date"]`; `limit: 500`.
-     Work each promotion's fee out from its own preview and revenue, count the deals
-     below their fee from these rows, and add the fees up. A promotion with no preview
-     row has no preview: say how many. More than 500 promotions in such a wave: "fee
-     preview not assigned", fee unavailable. Keep the two ids of a wave's promotions
-     whenever step 9 returns settled rows: they are what the rows are matched on.
+     carry a link to `amazon_promotions`. `mapped` = 0: no fee preview (the deals are
+     older than the mirror) - "fee unavailable" unless step 9 finds settled rows or the
+     skill holds a verified schedule for that marketplace and event. For every other
+     wave the link is followed, never assumed from dates or counts: a promotion of the
+     wave can point to a configuration that is missing from the mirror while another
+     promotion sits on the same dates with the same count.
+     - **the ids:** `amazon_promotion_performance`, the filters of this step plus
+       `promotions_api_mapping_id` `notNull`; `groupBy: ["promotion_type",
+       "start_date_time", "end_date_time", "promotions_api_mapping_id"]`,
+       `sum(product_revenue)` as `deal_revenue`; ordered by `start_date_time`
+       ascending, `limit: 500` (a full page: read the next with `skip`). One row per linked
+       promotion, for all waves at once.
+     - **their previews, wave by wave:** `amazon_promotions`, filter `promotion_id`
+       `in` the ids of one wave (at most 200 ids in one export; a larger wave takes
+       several, and their counts add up); `groupBy: ["upfront_fee_amount",
+       "upfront_fee_currency", "upfront_fee_frequency", "variable_fee_pct",
+       "variable_fee_cap_amount"]`, `countDistinct(promotion_id)` as `found`;
+       `limit: 50`.
+     The rows are the fee previews of exactly the wave's promotions. One row with
+     `found` = `mapped`: that preview belongs to each of them. `found` below `mapped`:
+     first count the ids you sent against the wave's id rows and send the lookup again
+     - one mistyped id looks the same as a missing configuration. Still below: the rest
+     have no configuration in the mirror and no preview - print "fee preview for
+     {found} of {deals} deals" and work the fee out for those only. Two or more
+     rows: the wave mixes fee previews - repeat the lookup with `promotion_id` in the
+     `groupBy` (`limit: 500`), work each promotion's fee out from its own preview and
+     its revenue in the id rows, and count the deals below their fee from those rows.
+     Keep the id rows: step 9 matches settled fee rows on them.
 5. **Deals with no sale, deals below their fee, largest deals** - three exports on
    `amazon_promotion_performance`, all with the filters `end_date_time >=` the start of
    the review window, `start_date_time <` tomorrow's date (upcoming waves stay out) and
@@ -581,12 +596,18 @@ plan check.
      try both);
    - compare **per promotion and per component**: the participation fee with the fixed
      part of the preview, the performance fee with its variable part (for coupons also
-     the redemption fee). A component that has posted replaces its part of the preview;
-     a component that has not posted stays a preview. A posting of 12 against a preview
-     of 12 + 100 gives 12 settled + 100 preview, not a fee of 12;
+     the redemption fee). A component can post in parts as well, so a posting is not
+     the whole component until it reaches the preview:
+     - nothing posted: the component is a preview;
+     - posted less than its preview: "{s} settled + {p - s} still estimated" - the
+       component counts at its preview, and the rest stays an estimate;
+     - posted at or above its preview: settled; use the posted amount.
+     A posting of 12 + 20 against a preview of 12 + 100 gives 32 settled + 80 still
+     estimated, a fee of 112 - not 32;
    - print the fee as "{a} settled + {b} preview" and keep the verdict conditional while
-     any part is a preview (framework 4). A settled component that differs from its
-     preview: print both and use the settled one.
+     any part is an estimate (framework 4). A component that is still below its preview
+     long after the promotion ended is not proof of a lower fee: show both figures and
+     send the user to the invoice.
 10. **Deal view** (only when the user names a promotion). Find it first:
     `amazon_promotion_performance`, filter `promotion_name` `=` that name; `groupBy:
     ["promotion_id", "promotions_api_mapping_id", "promotion_type", "start_date_time",
@@ -703,17 +724,17 @@ plan check.
 For a daily or weekly check ("what is running, what needs attention") run steps 1 to 7
 and step 9: the calendar, the running and upcoming waves with their deals with no sale
 and below their fee so far, Amazon's flags, the coupons and the fees that have posted.
-That is about 12 small exports, none of them premium. Review a wave for lift and profit
+That is about 18 small exports, none of them premium. Review a wave for lift and profit
 (step 8) once, in the first run after its 14 days after have passed, or when the user
-asks. A short message holds: the running
-event in one line (deals, revenue so far, fee preview, deals with no sale yet), the
-products to restock or reprice inside running deals, coupons with a budget alarm, and
-the verdict of a wave reviewed in this run. Nothing to report: say so in one line.
+asks. A short message holds: the running event in one line (deals, revenue so far, fee
+preview, deals with no sale yet), the products to restock or reprice inside running
+deals, coupons with a budget alarm, and the verdict of a wave reviewed in this run.
+Nothing to report: say so in one line.
 
 ## Output format
 
 ```
-Promotions - {seller} ({marketplace}) - calendar synced {last_synced_at} · review: promotions ended {from}..{to} · lift measured on profit data to {last day of the series}
+Promotions - {seller} ({marketplace}) - calendar synced {last_synced_at} · review: promotions ended {from}..{to} · lift windows end {last day of the series}
 Nothing was created or changed: promotions are managed in Seller Central.
 
 RUNNING NOW
@@ -738,7 +759,7 @@ DID THEY PAY OFF? Waves that ended in the window ({k} of {n} paid off{, {u} unce
   Largest deals: {wave} - {deal} {cur}.. ({share}% of the wave), ... · {wave} - no deal above {cur}..
   Lift and profit (the {k} largest waves):
   Wave        Lift (other products)  Avg price before -> during  Profit effect, promo days  Pull-forward  Fees     Incremental profit   Against its own baseline   Verdict
-  {wave}      x1.6 (x1.2)            {cur}9.40 -> {cur}8.10       -{cur}..{ (too small to call)}  {none | none counted - the deals added no units | -{cur}.. | not measurable yet}  {cur}..  -{cur}..  -{cur}..  {paid off | break-even | lost money | uncertain: {class} against the other products' pace, {class} against its own baseline | {class} if Amazon charges the fee preview, {class | too small to call} if it does not | no separate verdict - shares {n} products with {wave}}{ before deal fees}{ · {cur}{b} of it is a fee preview that settlements do not show}{ · amplified an existing per-unit loss}{ · provisional - {x}% of units have no product cost}
+  {wave}      x1.6 (x1.2)            {cur}9.40 -> {cur}8.10       -{cur}..{ (+-{band}: too small to call)}  {none | none counted - the deals added no units | -{cur}.. | not measurable yet}  {cur}..  -{cur}..  -{cur}..  {paid off | break-even | lost money | uncertain: {class} against the other products' pace, {class} against its own baseline | {class} if Amazon charges the fee preview, {class | too small to call} if it does not | no separate verdict - shares {n} products with {wave}}{ before deal fees}{ · {cur}{b} of it is a fee preview that settlements do not show}{ · amplified an existing per-unit loss}{ · provisional - {x}% of units have no product cost}
   Notes: {ad spend per day {a} -> {b}, {amount} above the expected level | other products earned {x} -> {y} per unit in the same days | baseline cut to {n} clean days because {wave} ran | no comparison group}
 
 COUPONS in the window
@@ -792,11 +813,12 @@ A UK store, two months after its autumn event and in the middle of a longer one.
   Profit was GBP 200 a day before, so GBP 480 was expected and GBP 310 came in: profit
   effect GBP -170. Units after the event stayed at the expected pace: no pull-forward.
   Incremental profit -170 - 1,469 = GBP -1,639, and almost all of it is fees on deals
-  that did not sell. The event ran two days, and GBP -170 is within 15% of the deal
-  revenue: too small to call (against its own baseline alone it is GBP -90, the same).
-  So the verdict rests on the fee: **lost money if Amazon charges the fee preview; too
-  small to call if it does not**. Settlements show no deal fee: one event invoice has to
-  settle it.
+  that did not sell. The event ran two days, so GBP -170 is only known to within GBP 435
+  either way (15% of the deal revenue): without a fee the result lies between a loss
+  and a gain, too small to call (the same against its own baseline, GBP -90). With the
+  fee preview both ends of the band are a loss. So the verdict rests on the fee: **lost
+  money if Amazon charges the fee preview; too small to call if it does not**.
+  Settlements show no deal fee: one event invoice has to settle it.
 - **A summer wave (14 days, 10 brand deals):** GBP 52,000 at the deal price, one deal
   carries 88% of it. No fee preview (the deals are older than the mirror): the verdict is
   "before deal fees". Lift x1.7 against x1.2 for the other products - a group without
@@ -817,19 +839,21 @@ A UK store, two months after its autumn event and in the middle of a longer one.
 
 ## Quality self-check
 
-- Is every export grouped, and did I avoid reading one row per promotion or per ASIN from
-  a raw table?
+- Is every export grouped, with no raw promotion, item or performance rows pulled?
 - Did I sum only the `product_` columns of the performance table, and group (not sum) the
   coupon totals?
 - Did I leave out CANCELED performance rows?
-- Did I assign each fee preview by the promotion's identity (`mapped`, or the id lookup
-  when the dates do not single out one preview), with the fixed part for every charged
-  period and the cap per promotion?
+- Did I assign each fee preview by the promotion's identity (the id lookup, for every
+  wave with a link), with the fixed part for every charged period and the cap per
+  promotion?
 - Did I keep running and upcoming waves apart?
 - Did I call the fee a preview, show settled and preview amounts per component, and
   keep a verdict that depends on a preview conditional?
-- For a wave of fewer than 7 promo days: did I treat a profit effect within 15% of the
-  deal revenue as too small to call?
+- For a wave of fewer than 7 promo days: did I work the outcome out at both ends of the
+  15% band, after fees, and say "too small to call" only where the ends fall in
+  different classes - without turning a measured gain into a loss?
+- Did I look every wave's fee preview up by its promotion ids, and count a component
+  that posted only in part at its preview?
 - Did I follow every flag by its promotion id, and give advice only for a promotion
   that runs or is coming?
 - Did I select each wave's products by its whole key (type, start, end) and check them
