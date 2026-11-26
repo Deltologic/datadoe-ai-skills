@@ -449,8 +449,10 @@ plan check.
        `promotions_api_mapping_id` `notNull`; `groupBy: ["promotion_type",
        "start_date_time", "end_date_time", "promotions_api_mapping_id"]`,
        `sum(product_revenue)` as `deal_revenue`; ordered by `start_date_time`
-       ascending, `limit: 500` (a full page: read the next with `skip`). One row per linked
-       promotion, for all waves at once.
+       ascending, `limit: 500` (a full page: read the next with `skip`). One row per
+       linked promotion, for all waves at once. These ids serve the configuration
+       lookup only; settled fees are matched from the settlement side (step 9), so
+       deals without a link are not lost there.
      - **their previews, wave by wave:** `amazon_promotions`, filter `promotion_id`
        `in` the ids of one wave (at most 200 ids in one export; a larger wave takes
        several, and their counts add up); `groupBy: ["upfront_fee_amount",
@@ -460,13 +462,17 @@ plan check.
      The rows are the fee previews of exactly the wave's promotions. One row with
      `found` = `mapped`: that preview belongs to each of them. `found` below `mapped`:
      first count the ids you sent against the wave's id rows and send the lookup again
-     - one mistyped id looks the same as a missing configuration. Still below: the rest
-     have no configuration in the mirror and no preview - print "fee preview for
-     {found} of {deals} deals" and work the fee out for those only. Two or more
-     rows: the wave mixes fee previews - repeat the lookup with `promotion_id` in the
-     `groupBy` (`limit: 500`), work each promotion's fee out from its own preview and
-     its revenue in the id rows, and count the deals below their fee from those rows.
-     Keep the id rows: step 9 matches settled fee rows on them.
+     - one mistyped id looks the same as a missing configuration. In two cases the
+     counts are not enough and the lookup is repeated with `promotion_id` in the
+     `groupBy` (`limit: 500`), which names each promotion that has a preview:
+     - `found` still below `mapped`: the promotions with no row have no configuration
+       in the mirror and no preview. Print "fee preview for {found} of {deals} deals"
+       and work the fee out for the named ones only, each from its own revenue in the
+       id rows - never from the wave's revenue;
+     - two or more rows: the wave mixes fee previews. Work each promotion's fee out from
+       its own preview and its own revenue.
+     In both cases count the deals below their fee from those promotion rows, not from
+     the threshold export of step 5.
 5. **Deals with no sale, deals below their fee, largest deals** - three exports on
    `amazon_promotion_performance`, all with the filters `end_date_time >=` the start of
    the review window, `start_date_time <` tomorrow's date (upcoming waves stay out) and
@@ -591,9 +597,17 @@ plan check.
    "settlements show no deal or coupon fee - where a fee is shown, it is Amazon's
    preview".
    With rows:
-   - match them to promotions by `amazon_order_id` = the promotion's id; a wave's ids
-     come from the id export of step 4 (`promotion_id` and `promotions_api_mapping_id` -
-     try both);
+   - match them from the settlement side: the `amazon_order_id` of a fee row holds a
+     promotion's id, and it can be either id. Look the values up on
+     `amazon_promotion_performance` with combinator `or`: `promotion_id` `in` them,
+     `promotions_api_mapping_id` `in` them; `groupBy: ["promotion_id",
+     "promotions_api_mapping_id", "promotion_type", "start_date_time",
+     "end_date_time"]`, `sum(product_revenue)` as `deal_revenue`; `limit: 300`. Coupon
+     fee rows: the same on `amazon_coupon_performance` with `coupon_id` `in` them,
+     `groupBy: ["coupon_id", "start_date_time", "end_date_time"]`. Each row found ties
+     a settled fee to its promotion and its wave - also for a deal with no link to the
+     mirror. A fee row that matches nothing: list it as "settled deal fee, promotion not
+     found" with its date and amount, and do not add it to any wave;
    - compare **per promotion and per component**: the participation fee with the fixed
      part of the preview, the performance fee with its variable part (for coupons also
      the redemption fee). A component can post in parts as well, so a posting is not
@@ -844,8 +858,10 @@ A UK store, two months after its autumn event and in the middle of a longer one.
   coupon totals?
 - Did I leave out CANCELED performance rows?
 - Did I assign each fee preview by the promotion's identity (the id lookup, for every
-  wave with a link), with the fixed part for every charged period and the cap per
-  promotion?
+  wave with a link; by promotion where only some have a preview or the previews
+  differ), with the fixed part for every charged period and the cap per promotion?
+- Did I match settled fee rows from the settlement side, on either id, also for deals
+  with no link to the mirror?
 - Did I keep running and upcoming waves apart?
 - Did I call the fee a preview, show settled and preview amounts per component, and
   keep a verdict that depends on a preview conditional?
