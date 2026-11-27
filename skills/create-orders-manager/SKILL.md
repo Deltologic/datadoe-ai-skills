@@ -16,7 +16,7 @@ metadata:
 
 # Orders Manager
 
-Build a complete, working single-page Orders Manager app using the DataDoe REST API. The app must be functional after a single execution.
+Build a complete, working single-page Orders Manager app using the DataDoe REST API. Deliver a working app with server authentication or a synthetic-data preview.
 
 API docs: https://api.datadoe.com/api/v1/docs
 Data scheme: https://api.datadoe.com/api/v1/spec/data-scheme
@@ -26,7 +26,7 @@ Data scheme: https://api.datadoe.com/api/v1/spec/data-scheme
 Determine your agent type before starting:
 
 - **Low-level agent** (Cursor, Claude Code, Codex, Aider, etc.): follow the **Default Tech Stack** below.
-- **High-level vibe coding assistant** (Lovable, Base44, Bolt, v0, etc.): ignore the tech stack section entirely; use whatever the platform provides. Follow only the **App Features**, **DataDoe API Integration**, and **Implementation Rules** sections.
+- **High-level vibe coding assistant** (Lovable, Base44, Bolt, v0, etc.): ignore the tech stack section entirely; use whatever the platform provides. Implement **Auth & Config** with backend features or a separate server. Use synthetic data when server secrets or sessions are unavailable.
 
 ## App Features
 
@@ -71,29 +71,34 @@ type StorageKey = `datadoe-orders-manager::${string}`;
 
 ### Auth & Config
 
-The app always targets the **production** DataDoe API at `https://api.datadoe.com`. During local development, Vite proxies `/api` requests to this domain to avoid CORS. There is no staging/production distinction — always use the same API target.
+The browser calls its own origin under `/api`. The backend calls
+`https://api.datadoe.com/api/v1` with `datadoe-api-key` from a runtime
+`DATADOE_API_KEY` server secret. Provision a dedicated key scoped to the
+permitted seller accounts and Order Line Items exports.
 
-`.env` file structure (create `.env.example` with the placeholders below):
+Choose a platform that supports both server secrets and authenticated
+sessions. If either is unavailable, build a synthetic-data preview. For
+shared deployments, use an `HttpOnly`, `Secure`, `SameSite=Lax` session cookie.
+Verify the session and seller permissions on every request. Bind development
+servers to loopback and require same-origin requests. For export creation,
+verify the origin or a CSRF token, validate the request body, and apply
+per-user quotas and timeouts.
 
-```bash
-# Vite proxies /api → https://api.datadoe.com (CORS bypass for local dev)
-VITE_API_BASE_URL=/api
-VITE_PROXY_TARGET=https://api.datadoe.com
-VITE_DATADOE_API_KEY=<your-api-key>
-```
+Implement these app routes with fixed upstream paths and methods:
 
-- `VITE_API_BASE_URL` **must always be `/api`** — the browser app never calls `api.datadoe.com` directly.
-- `VITE_PROXY_TARGET` **must always be `https://api.datadoe.com`** — this is the Vite proxy upstream.
-- `VITE_DATADOE_API_KEY` — the API key obtained from the DataDoe dashboard.
+| Method | App route | Server authorization |
+| --- | --- | --- |
+| GET | `/api/v1/util/sellers-and-vendors` | Filter the response to sellers assigned to the current session. |
+| GET | `/api/v1/exports/sources` | Check the seller and return the Order Line Items source. |
+| POST | `/api/v1/exports` | Check the seller, source, columns and filters. Record the returned export ID with its owner and seller. |
+| GET | `/api/v1/exports/:id` and `/api/v1/exports/:id/raw` | Require the session owner of the export to still have access to its seller. |
 
-**Header selection logic** (mutually exclusive — never send both):
-
-- If `VITE_DATADOE_API_KEY` is set → attach `datadoe-api-key` header.
-- Else if `VITE_DATADOE_ORGANIZATION_ID` is set → attach `datadoe-organization-id` header.
-
-Always attach `Content-Type: application/json` and `Accept: application/json`.
-
-Rate limit: 2 req/s per org. On `429`, read `Retry-After` header, wait, retry.
+Use server-generated upstream headers. For redirects, fetch from the
+deployment's approved storage hosts in a separate request without the DataDoe
+key. Bound the response size and stream it through the authenticated backend.
+Send `Cache-Control: no-store` with order data. Omit keys, redirect URLs and
+order rows from telemetry. Return a sanitized error and `Retry-After` when the
+upstream API rate limits a request.
 
 ### Anti-Rate-Limit Guardrails (Mandatory)
 
@@ -202,7 +207,7 @@ When `status` is `COMPLETED`, download. If `ERROR`, show error.
 GET /api/v1/exports/<exportId>/raw
 ```
 
-- `200`: redirects (302) to a pre-signed S3 URL — axios must follow the redirect automatically (`followRedirects: true` in Vite proxy handles this on the server side; the browser axios instance follows it natively).
+- `200`: redirects (302) to a pre-signed S3 URL — the app backend validates and fetches the storage URL, then streams the result to the browser.
 - `204`: still processing — retry after a few seconds.
 - `404`: export not found.
 
@@ -363,7 +368,7 @@ npm install axios@1.13.6 @tanstack/react-table dayjs lucide-react
 3. Install dependencies.
 4. Add `.env` to `.gitignore`.
 5. Create `.env.example`.
-6. Verify API connectivity with curl.
+6. Implement the server routes and verify the session and credential boundary.
 7. Implement app code using exact snippets from the **Mandatory Code Snippets** section.
 8. Run build/lint checks.
 
@@ -458,88 +463,24 @@ function setItem(key: StorageKey, value: string): void {
 
 **Never edit `.env` automatically — treat it as a protected secrets file.**
 
-### Step 1: Direct Target Connectivity
+Use synthetic data or a dedicated read-only server key to verify:
 
-```bash
-source .env
-curl -sS -o /tmp/datadoe-sellers.json -D /tmp/datadoe-sellers.headers \
-  "$VITE_PROXY_TARGET/api/v1/util/sellers-and-vendors" \
-  -H "datadoe-api-key: $VITE_DATADOE_API_KEY" \
-  -H "Accept: application/json" \
-  -H "Content-Type: application/json"
-cat /tmp/datadoe-sellers.headers | head -1
-```
-
-Expected: `HTTP/2 200`. **Continue only when direct check returns HTTP 200.**
-If 403: wrong API key for the target. If 502: DNS/network issue. **Stop and fix before coding.**
-
-### Step 2: Local Proxy Verification (after `npm run dev`)
-
-After starting the dev server, read its output to find the actual port (may not be 5173 if that port is in use), then run:
-
-```bash
-source .env
-DEV_PORT=<actual-port-from-vite-output>
-curl -sS -o /tmp/datadoe-proxy-sellers.json -D /tmp/datadoe-proxy-sellers.headers \
-  "http://localhost:${DEV_PORT}/api/v1/util/sellers-and-vendors" \
-  -H "datadoe-api-key: $VITE_DATADOE_API_KEY" \
-  -H "Accept: application/json" \
-  -H "Content-Type: application/json"
-cat /tmp/datadoe-proxy-sellers.headers | head -1
-```
-
-Expected: `HTTP/1.1 200 OK`. **Finish only when localhost proxy check also returns HTTP 200.**
-
-### Debug Path for 403/502
-
-If either check fails, follow this mandatory debug strategy:
-
-- `502` + `ENOTFOUND`: proxy target DNS/network mismatch. Verify `VITE_PROXY_TARGET` is exactly `https://api.datadoe.com` and that the process has network access. If running in a sandbox, restart with full network permissions.
-- `502` on wrong localhost port: check actual Vite port from terminal output and retry on the correct port.
-- `403`: API key/target environment mismatch (e.g., staging key used against production target). Verify the API key matches the target.
-- After **any** fix, re-run **both** checks (direct target and localhost proxy).
+- The local app returns a permitted seller list from its own origin.
+- The deployed API returns `401` without a session and denies another user's sellers or exports.
+- The browser can create, poll and download an export for a permitted seller.
+- The browser asset bundles, requests and storage contain no DataDoe credential. Check a synthetic sentinel value in the built assets.
 
 ## Mandatory Code Snippets
 
-The following files must be implemented **exactly as shown**. These are verified working against the production API. Do not modify the proxy configuration, base URL logic, header logic, or request parameter shapes.
-
-### `vite.config.ts` — Proxy Configuration
-
-```typescript
-import { defineConfig, loadEnv } from "vite";
-import react from "@vitejs/plugin-react";
-
-export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), "");
-  const proxyTarget = env.VITE_PROXY_TARGET || "https://api.datadoe.com";
-
-  return {
-    plugins: [react()],
-    server: {
-      proxy: {
-        "/api": {
-          target: proxyTarget,
-          changeOrigin: true,
-          secure: true,
-          followRedirects: true,
-        },
-      },
-    },
-  };
-});
-```
-
-**Why this works:** The browser sends requests to `/api/v1/...` on localhost. Vite's dev server proxies them to `https://api.datadoe.com/api/v1/...`. `changeOrigin: true` sets the `Host` header to the target. `secure: true` enforces TLS verification. `followRedirects: true` handles any 3xx from the API.
+Use the app routes above for both development and production. In Vite, route
+the relative `/api` prefix to the app's loopback backend during development.
+Serve `/api` on the same origin as the browser bundle in production.
 
 ### `src/api/client.ts` — Axios Instance with Pacing & 429 Retry
 
 ```typescript
 import axios from "axios";
 import type { AxiosInstance, AxiosRequestConfig, AxiosResponse } from "axios";
-
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
-const API_KEY = import.meta.env.VITE_DATADOE_API_KEY;
-const ORG_ID = import.meta.env.VITE_DATADOE_ORGANIZATION_ID;
 
 const MIN_REQUEST_INTERVAL_MS = 600;
 let lastRequestTime = 0;
@@ -555,22 +496,11 @@ async function waitForPacing(): Promise<void> {
   lastRequestTime = Date.now();
 }
 
-function buildAuthHeaders(): Record<string, string> {
-  if (API_KEY) {
-    return { "datadoe-api-key": API_KEY };
-  }
-  if (ORG_ID) {
-    return { "datadoe-organization-id": ORG_ID };
-  }
-  return {};
-}
-
 const instance: AxiosInstance = axios.create({
-  baseURL: BASE_URL,
+  baseURL: "/api",
   headers: {
     "Content-Type": "application/json",
     Accept: "application/json",
-    ...buildAuthHeaders(),
   },
 });
 
@@ -598,8 +528,7 @@ export default instance;
 
 **Critical details:**
 
-- `BASE_URL` is always `/api` (from `.env`), never a full URL — all requests go through the Vite proxy.
-- Auth headers use `datadoe-api-key` (not `datadoe-organization-id`) when both are available. Never send both.
+- The browser sends its same-origin session cookie on each request.
 - The pacing interceptor enforces 600ms minimum between requests (< 2 req/s limit).
 - The 429 interceptor reads `Retry-After`, waits, and retries once.
 
@@ -722,18 +651,17 @@ export async function fetchExportRaw(exportId: string) {
 }
 ```
 
-### `.env.example`
+### Server `.env.example`
 
-```bash
-# Vite proxies /api → https://api.datadoe.com (CORS bypass for local dev)
-VITE_API_BASE_URL=/api
-VITE_PROXY_TARGET=https://api.datadoe.com
-VITE_DATADOE_API_KEY=<your-api-key>
+```dotenv
+DATADOE_API_KEY=
 ```
+
+Load the value from server configuration at runtime.
 
 ## Implementation Rules
 
-1. **Single run**: the app must work after one execution. Do not leave TODOs or placeholders.
+1. **Single run**: deliver the working mode selected in **Auth & Config**.
 2. **Test API calls first**: before coding the full UI, verify the export flow works by running the mandatory connectivity checks.
 3. **Group line items by order**: the API returns flat rows. Group by `amazon_order_id` before rendering.
 4. **Handle empty states**: no sellers, no orders, export still loading — all need UI.
@@ -741,7 +669,7 @@ VITE_DATADOE_API_KEY=<your-api-key>
 6. **Use `outputType: "JSON"`** for exports.
 7. **Poll interval**: 5 seconds between status checks. Timeout after 2 minutes with an error message.
 8. **Retry on 429**: auto-retry with the `Retry-After` value, with incrementally increasing delays.
-9. **Use the exact code snippets** from the Mandatory Code Snippets section for `vite.config.ts`, `src/api/client.ts`, and `src/api/datadoe.ts`.
+9. **Use the exact code snippets** from the Mandatory Code Snippets section for `src/api/client.ts` and `src/api/datadoe.ts`.
 10. **Run build and lint** before finalizing.
 11. **Leave dev server running** in background after implementation.
 12. **Report local URL, proxy check result**, and any residual risk explicitly.
